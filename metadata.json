@@ -1,0 +1,7 @@
+{
+  "name": "A&R Engenharia - Controle de Ponto",
+  "description": "Sistema de controle de ponto eletrônico com geolocalização de alta precisão e painel administrativo.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
