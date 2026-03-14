@@ -160,9 +160,16 @@ function calculateHours(p: Partial<PointRecord>) {
   const e2 = parseTime(p.e2);
   const s2 = parseTime(p.s2);
 
+  const calcDiff = (start: number | null, end: number | null) => {
+    if (start === null || end === null) return 0;
+    let diff = end - start;
+    if (diff < 0) diff += 24;
+    return diff;
+  };
+
   let total = 0;
-  if (e1 !== null && s1 !== null) total += Math.max(0, s1 - e1);
-  if (e2 !== null && s2 !== null) total += Math.max(0, s2 - e2);
+  total += calcDiff(e1, s1);
+  total += calcDiff(e2, s2);
   
   return total;
 }
@@ -390,13 +397,28 @@ export default function App() {
     const uData = storage.getUsers();
     const wData = storage.getWorks();
 
+    // Recalculate total_hours for all points
+    let updated = false;
+    const recalculated = pData.map(p => {
+      const newTotal = calculateHours(p);
+      if (Math.abs(newTotal - (p.total_hours || 0)) > 0.01) {
+        updated = true;
+        return { ...p, total_hours: newTotal };
+      }
+      return p;
+    });
+    
+    if (updated) {
+      storage.savePoints(recalculated);
+    }
+
     if (user.role !== 'funcionario') {
-      setPoints(pData);
+      setPoints(recalculated);
       setUsers(uData);
       setWorks(wData);
     } else {
       setWorks(wData);
-      setPoints(pData.filter(p => p.user_id === user.id));
+      setPoints(recalculated.filter(p => p.user_id === user.id));
     }
   }, [user]);
 
@@ -2123,27 +2145,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex justify-between items-center">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Calculado:</span>
               <span className="text-lg font-black text-orange-500">
-                {(() => {
-                  const parse = (t: string) => {
-                    if (!t) return null;
-                    const [h, m] = t.split(':').map(Number);
-                    return h + m / 60;
-                  };
-                  const e1 = parse(editFormData.e1);
-                  const s1 = parse(editFormData.s1);
-                  const e2 = parse(editFormData.e2);
-                  const s2 = parse(editFormData.s2);
-                  
-                  const getDiff = (start: number, end: number) => {
-                    if (end < start) return (end + 24) - start;
-                    return end - start;
-                  };
-
-                  let total = 0;
-                  if (e1 !== null && s1 !== null) total += getDiff(e1, s1);
-                  if (e2 !== null && s2 !== null) total += getDiff(e2, s2);
-                  return total.toFixed(2);
-                })()}h
+                {calculateHours(editFormData).toFixed(2)}h
               </span>
             </div>
 
