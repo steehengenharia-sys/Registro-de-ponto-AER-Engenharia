@@ -161,6 +161,7 @@ service cloud.firestore {
     match /users/{userId} {
       // Users can read their own profile, admins can read all
       allow read: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
       
       // Users can create their own profile on first login (as funcionario)
       allow create: if (isOwner(userId) && request.resource.data.role == 'funcionario' && isValidUser()) || (isAdmin() && isValidUser());

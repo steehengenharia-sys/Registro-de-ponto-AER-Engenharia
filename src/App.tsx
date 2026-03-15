@@ -954,15 +954,15 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         }
       });
 
-      // 4. Incomplete hours (< 8h)
+      // 4. Incomplete hours (< 10h)
       let incompleteCount = 0;
       userHoursMap.forEach((hours) => {
-        if (hours < 8) {
+        if (hours < 10) {
           incompleteCount++;
         }
       });
       if (incompleteCount > 0) {
-        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 8h trabalhadas`);
+        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 10h trabalhadas`);
       }
 
       setDashboardData({
@@ -2123,7 +2123,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                     {(() => {
                       const status = getPointStatus(p);
                       return (
-                        <span className={`text-[9px] font-black px-2 py-1 rounded-md uppercase tracking-tighter ${status.bg} ${status.color}`}>
+                        <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-tighter whitespace-nowrap ${status.bg} ${status.color}`}>
                           {status.label}
                         </span>
                       );
@@ -2197,7 +2197,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 {(() => {
                   const status = getPointStatus(p);
                   return (
-                    <span className={`text-[9px] font-black px-2 py-1 rounded-md uppercase tracking-tighter ${status.bg} ${status.color}`}>
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-tighter whitespace-nowrap ${status.bg} ${status.color}`}>
                       {status.label}
                     </span>
                   );
