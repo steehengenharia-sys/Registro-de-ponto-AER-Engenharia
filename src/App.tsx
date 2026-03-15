@@ -2069,7 +2069,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               type="date" 
               value={filters.startDate} 
               onChange={e => setFilters({ ...filters, startDate: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm"
+              className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm"
             />
           </div>
           <div className="space-y-1.5">
@@ -2078,7 +2078,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               type="date" 
               value={filters.endDate} 
               onChange={e => setFilters({ ...filters, endDate: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm"
+              className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm"
             />
           </div>
         </div>
@@ -2735,7 +2735,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               type="date" 
               value={filters.startDate} 
               onChange={e => setFilters({ ...filters, startDate: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white"
+              className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm text-white"
             />
           </div>
           <div className="space-y-1.5">
@@ -2744,7 +2744,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               type="date" 
               value={filters.endDate} 
               onChange={e => setFilters({ ...filters, endDate: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white"
+              className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm text-white"
             />
           </div>
         </div>
