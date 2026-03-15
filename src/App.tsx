@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Clock, 
   User, 
@@ -34,34 +34,21 @@ import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import { auth, db } from './firebase';
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { auth, db, secondaryAuth } from './firebase';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc } from 'firebase/firestore';
 
 // --- Storage Helper (Now using Firestore) ---
 
 const storage = {
-  getUsers: async (): Promise<UserData[]> => {
+  getUsers: async (userId?: string): Promise<UserData[]> => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'users'));
-      const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserData));
-      
-      // Rule: Ensure exactly one admin_master exists
-      let adminMasters = users.filter(u => u.role === 'admin_master');
-      
-      if (adminMasters.length === 0) {
-        // Create mandatory default if none exists
-        const newAdminMaster: UserData = {
-          id: crypto.randomUUID(),
-          name: "Administrador Master",
-          username: "adminmaster",
-          role: "admin_master",
-          role_name: "Engenheiro Chefe",
-          phone: ""
-        };
-        await setDoc(doc(db, 'users', newAdminMaster.id), newAdminMaster);
-        users.push(newAdminMaster);
+      let q = collection(db, 'users') as any;
+      if (userId) {
+        q = query(collection(db, 'users'), where('id', '==', userId));
       }
+      const querySnapshot = await getDocs(q);
+      const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as object) } as UserData));
       
       return users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
@@ -76,6 +63,20 @@ const storage = {
       } catch (e) {
         handleFirestoreError(e, OperationType.WRITE, `users/${user.id}`);
       }
+    }
+  },
+  saveUser: async (user: UserData) => {
+    try {
+      await setDoc(doc(db, 'users', user.id), user);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `users/${user.id}`);
+    }
+  },
+  deleteUser: async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'users', id));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `users/${id}`);
     }
   },
   
@@ -97,11 +98,29 @@ const storage = {
       }
     }
   },
-  
-  getPoints: async (): Promise<PointRecord[]> => {
+  saveWork: async (work: Work) => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'points'));
-      return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PointRecord)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      await setDoc(doc(db, 'works', work.id), work);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `works/${work.id}`);
+    }
+  },
+  deleteWork: async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'works', id));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `works/${id}`);
+    }
+  },
+  
+  getPoints: async (userId?: string): Promise<PointRecord[]> => {
+    try {
+      let q = collection(db, 'points') as any;
+      if (userId) {
+        q = query(collection(db, 'points'), where('user_id', '==', userId));
+      }
+      const querySnapshot = await getDocs(q);
+      return querySnapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as object) } as PointRecord)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'points');
       return [];
@@ -335,6 +354,7 @@ const Button = ({
   variant = 'primary', 
   className = "", 
   disabled = false,
+  loading = false,
   type = "button"
 }: { 
   children: React.ReactNode, 
@@ -342,6 +362,7 @@ const Button = ({
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost',
   className?: string,
   disabled?: boolean,
+  loading?: boolean,
   type?: "button" | "submit"
 }) => {
   const variants = {
@@ -355,9 +376,15 @@ const Button = ({
     <button
       type={type}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || loading}
       className={`px-4 py-2 rounded-xl font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2 ${variants[variant]} ${className}`}
     >
+      {loading ? (
+        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+      ) : null}
       {children}
     </button>
   );
@@ -369,14 +396,16 @@ const Input = ({
   value, 
   onChange, 
   placeholder,
-  required = false
+  required = false,
+  disabled = false
 }: { 
   label: string, 
   type?: string, 
   value: string, 
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void,
   placeholder?: string,
-  required?: boolean
+  required?: boolean,
+  disabled?: boolean
 }) => (
   <div className="space-y-1.5">
     <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
@@ -386,7 +415,8 @@ const Input = ({
       onChange={onChange}
       placeholder={placeholder}
       required={required}
-      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all placeholder:text-slate-600"
+      disabled={disabled}
+      className={`w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all placeholder:text-slate-600 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
     />
   </div>
 );
@@ -451,12 +481,13 @@ export default function App() {
             setUser({ id: userDoc.id, ...userDoc.data() } as UserData);
           } else {
             // Create default user profile if it doesn't exist
+            const isDefaultAdmin = firebaseUser.email === 'steeh.engenharia@gmail.com';
             const newUser: UserData = {
               id: firebaseUser.uid,
               username: firebaseUser.email?.split('@')[0] || 'usuario',
               name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Usuário',
-              role: 'funcionario', // Default role
-              role_name: 'Funcionário',
+              role: isDefaultAdmin ? 'admin_master' : 'funcionario',
+              role_name: isDefaultAdmin ? 'Engenheiro Chefe' : 'Funcionário',
               phone: '',
             };
             await setDoc(userRef, {
@@ -484,9 +515,11 @@ export default function App() {
 
   const refreshData = useCallback(async () => {
     if (!user) return;
-    const pData = await storage.getPoints();
-    const uData = await storage.getUsers();
-    const wData = await storage.getWorks();
+    
+    const isFuncionario = user.role === 'funcionario';
+    
+    const pData = await storage.getPoints(isFuncionario ? user.id : undefined);
+    const uData = await storage.getUsers(isFuncionario ? user.id : undefined);
 
     // Recalculate total_hours for all points
     const updatedPoints: PointRecord[] = [];
@@ -507,13 +540,11 @@ export default function App() {
       }
     }
 
-    if (user.role !== 'funcionario') {
+    if (!isFuncionario) {
       setPoints(recalculated);
       setUsers(uData);
-      setWorks(wData);
     } else {
-      setWorks(wData);
-      setPoints(recalculated.filter(p => p.user_id === user.id));
+      setPoints(recalculated);
     }
   }, [user]);
 
@@ -522,6 +553,18 @@ export default function App() {
       if (user.role === 'funcionario') setView('employee');
       else setView('dashboard');
       refreshData();
+      
+      // Real-time listener for works
+      const unsubscribeWorks = onSnapshot(collection(db, 'works'), (snapshot) => {
+        const wData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Work)).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        setWorks(wData);
+      }, (error) => {
+        console.error("Error listening to works:", error);
+      });
+      
+      return () => {
+        unsubscribeWorks();
+      };
     }
   }, [user, refreshData]);
 
@@ -1158,6 +1201,10 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
     valor_diaria: '' as string | number 
   });
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ id: string, show: boolean } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const isDeletingRef = useRef(false);
 
   const deleteFuncionario = (id: string | number) => {
     if (String(id) === String(user.id)) {
@@ -1173,22 +1220,32 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
   };
 
   const confirmDelete = async () => {
-    if (!deleteConfirmation) return;
+    if (!deleteConfirmation || isDeletingRef.current) return;
     
-    const allUsers = await storage.getUsers();
-    const filtered = allUsers.filter(u => String(u.id) !== String(deleteConfirmation.id));
-    await storage.saveUsers(filtered);
-    
-    // Also delete their points
-    const allPoints = await storage.getPoints();
-    const filteredPoints = allPoints.filter(p => String(p.user_id) !== String(deleteConfirmation.id));
-    await storage.savePoints(filteredPoints);
-
-    onRefresh();
-    setDeleteConfirmation(null);
+    isDeletingRef.current = true;
+    setIsDeleting(true);
+    try {
+      await storage.deleteUser(deleteConfirmation.id);
+      
+      // Also delete their points
+      const allPoints = await storage.getPoints();
+      const filteredPoints = allPoints.filter(p => String(p.user_id) !== String(deleteConfirmation.id));
+      await storage.savePoints(filteredPoints);
+  
+      onRefresh();
+      setDeleteConfirmation(null);
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      alert("Erro ao excluir usuário.");
+    } finally {
+      isDeletingRef.current = false;
+      setIsDeleting(false);
+    }
   };
 
   const salvarFuncionario = async () => {
+    if (isSubmittingRef.current) return;
+
     if (!formData.nome || !formData.usuario || (!editingUser && !formData.senha)) {
       alert("Por favor, preencha os campos obrigatórios (Nome, Usuário e Senha).");
       return;
@@ -1199,58 +1256,87 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
       return;
     }
 
-    const allUsers = await storage.getUsers();
-    
-    // Rule: Only one admin_master allowed
-    if (formData.nivel === 'admin_master') {
-      const existingAdminMaster = allUsers.find(u => u.role === 'admin_master');
-      if (existingAdminMaster && (!editingUser || String(editingUser.id) !== String(existingAdminMaster.id))) {
-        alert("Já existe um Administrador Master no sistema. Só é permitido um.");
-        return;
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    try {
+      const allUsers = await storage.getUsers();
+      
+      // Rule: Only one admin_master allowed
+      if (formData.nivel === 'admin_master') {
+        const existingAdminMaster = allUsers.find(u => u.role === 'admin_master');
+        if (existingAdminMaster && (!editingUser || String(editingUser.id) !== String(existingAdminMaster.id))) {
+          alert("Já existe um Administrador Master no sistema. Só é permitido um.");
+          return;
+        }
       }
-    }
-
-    if (editingUser) {
-      if (user.role === 'admin' && editingUser.role === 'admin_master') {
-        alert("Você não tem permissão para editar o Administrador Master.");
-        return;
-      }
-      const index = allUsers.findIndex(u => String(u.id) === String(editingUser.id));
-      if (index !== -1) {
-        allUsers[index].username = formData.usuario;
-        allUsers[index].name = formData.nome;
-        allUsers[index].role = formData.nivel as Role;
-        allUsers[index].role_name = formData.cargo;
-        allUsers[index].phone = formData.telefone;
-        allUsers[index].valor_diaria = formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined;
+  
+      if (editingUser) {
+        if (user.role === 'admin' && editingUser.role === 'admin_master') {
+          alert("Você não tem permissão para editar o Administrador Master.");
+          return;
+        }
+        const index = allUsers.findIndex(u => String(u.id) === String(editingUser.id));
+        if (index !== -1) {
+          allUsers[index].username = formData.usuario;
+          allUsers[index].name = formData.nome;
+          allUsers[index].role = formData.nivel as Role;
+          allUsers[index].role_name = formData.cargo;
+          allUsers[index].phone = formData.telefone;
+          allUsers[index].valor_diaria = formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined;
+          
+          if (formData.senha) allUsers[index].senha = formData.senha;
+          
+          await storage.saveUser(allUsers[index]);
+        }
+      } else {
+        // Check if username exists
+        if (allUsers.some(u => u.username === formData.usuario)) {
+          alert("Este nome de usuário já está em uso.");
+          return;
+        }
         
-        if (formData.senha) allUsers[index].senha = formData.senha;
+        try {
+          const email = formData.usuario.includes('@') ? formData.usuario : `${formData.usuario}@areng.com`;
+          const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.senha);
+          
+          const newUser: UserData = {
+            id: userCredential.user.uid,
+            username: formData.usuario,
+            senha: formData.senha,
+            name: formData.nome,
+            role: formData.nivel as Role,
+            role_name: formData.cargo,
+            phone: formData.telefone,
+            valor_diaria: formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined
+          };
+          
+          await storage.saveUser(newUser);
+          await secondaryAuth.signOut();
+        } catch (error: any) {
+          console.error("Erro ao criar usuário no Firebase Auth:", error);
+          if (error.code === 'auth/email-already-in-use') {
+            alert("Este nome de usuário já está em uso no sistema de autenticação.");
+          } else if (error.code === 'auth/weak-password') {
+            alert("A senha deve ter pelo menos 6 caracteres.");
+          } else {
+            alert("Erro ao criar usuário: " + error.message);
+          }
+          return;
+        }
       }
-    } else {
-      // Check if username exists
-      if (allUsers.some(u => u.username === formData.usuario)) {
-        alert("Este nome de usuário já está em uso.");
-        return;
-      }
-      const newUser: UserData = {
-        id: crypto.randomUUID(),
-        username: formData.usuario,
-        senha: formData.senha,
-        name: formData.nome,
-        role: formData.nivel as Role,
-        role_name: formData.cargo,
-        phone: formData.telefone,
-        valor_diaria: formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined
-      };
-      allUsers.push(newUser);
+  
+      alert(editingUser ? "Funcionário atualizado" : "Funcionário cadastrado com sucesso");
+      setIsModalOpen(false);
+      onRefresh();
+      setFormData({ usuario: '', senha: '', nome: '', nivel: 'funcionario', cargo: '', telefone: '', valor_diaria: '' });
+      setEditingUser(null);
+    } catch (error) {
+      console.error("Error saving user:", error);
+      alert("Erro ao salvar usuário.");
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
     }
-
-    await storage.saveUsers(allUsers);
-    alert(editingUser ? "Funcionário atualizado" : "Funcionário cadastrado com sucesso");
-    setIsModalOpen(false);
-    onRefresh();
-    setFormData({ usuario: '', senha: '', nome: '', nivel: 'funcionario', cargo: '', telefone: '', valor_diaria: '' });
-    setEditingUser(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1337,23 +1423,23 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
         <div className="space-y-4">
           <p className="text-white">Tem certeza que deseja excluir este funcionário?</p>
           <div className="flex gap-4 pt-4">
-            <Button onClick={() => setDeleteConfirmation(null)} variant="secondary" className="w-full">Cancelar</Button>
-            <Button onClick={confirmDelete} className="w-full bg-red-600 hover:bg-red-700">Excluir Funcionário</Button>
+            <Button onClick={() => setDeleteConfirmation(null)} variant="secondary" className="w-full" disabled={isDeleting}>Cancelar</Button>
+            <Button onClick={confirmDelete} className="w-full bg-red-600 hover:bg-red-700" loading={isDeleting}>Excluir Funcionário</Button>
           </div>
         </div>
       </Modal>
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingUser ? "Editar Funcionário" : "Novo Funcionário"}>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Input label="Nome Completo" value={formData.nome} onChange={e => setFormData({ ...formData, nome: e.target.value })} required />
+          <Input label="Nome Completo" value={formData.nome} onChange={e => setFormData({ ...formData, nome: e.target.value })} required disabled={isSubmitting} />
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Cargo" value={formData.cargo} onChange={e => setFormData({ ...formData, cargo: e.target.value })} required />
-            <Input label="Valor da Diária (R$)" type="number" value={formData.valor_diaria.toString()} onChange={e => setFormData({ ...formData, valor_diaria: e.target.value })} />
+            <Input label="Cargo" value={formData.cargo} onChange={e => setFormData({ ...formData, cargo: e.target.value })} required disabled={isSubmitting} />
+            <Input label="Valor da Diária (R$)" type="number" value={formData.valor_diaria.toString()} onChange={e => setFormData({ ...formData, valor_diaria: e.target.value })} disabled={isSubmitting} />
           </div>
-          <Input label="Telefone" value={formData.telefone} onChange={e => setFormData({ ...formData, telefone: e.target.value })} required />
+          <Input label="Telefone" value={formData.telefone} onChange={e => setFormData({ ...formData, telefone: e.target.value })} required disabled={isSubmitting} />
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Usuário" value={formData.usuario} onChange={e => setFormData({ ...formData, usuario: e.target.value })} required />
-            <Input label="Senha" type="password" value={formData.senha} onChange={e => setFormData({ ...formData, senha: e.target.value })} required={!editingUser} />
+            <Input label="Usuário" value={formData.usuario} onChange={e => setFormData({ ...formData, usuario: e.target.value })} required disabled={isSubmitting} />
+            <Input label="Senha" type="password" value={formData.senha} onChange={e => setFormData({ ...formData, senha: e.target.value })} required={!editingUser} disabled={isSubmitting} />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Nível de Acesso</label>
@@ -1361,6 +1447,7 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
               value={formData.nivel} 
               onChange={e => setFormData({ ...formData, nivel: e.target.value as Role })}
               className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
+              disabled={isSubmitting}
             >
               <option value="funcionario">Funcionário</option>
               {(user.role === 'admin_master' || user.role === 'admin') && (
@@ -1372,7 +1459,7 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
             </select>
           </div>
           <div className="pt-4">
-            <Button onClick={salvarFuncionario} className="w-full py-3">{editingUser ? 'Salvar Alterações' : 'Cadastrar Funcionário'}</Button>
+            <Button type="submit" className="w-full py-3" loading={isSubmitting}>{editingUser ? 'Salvar Alterações' : 'Cadastrar Funcionário'}</Button>
           </div>
         </form>
       </Modal>
@@ -1385,6 +1472,10 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
   const [editingWork, setEditingWork] = useState<Work | null>(null);
   const [formData, setFormData] = useState({ name: '', city: '', address: '', lat: '', lng: '', radius: '' });
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ id: string, show: boolean, hasLinkedPoints: boolean } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const isDeletingRef = useRef(false);
 
   const deleteObra = async (id: string) => {
     if (user.role !== 'admin' && user.role !== 'admin_master') {
@@ -1399,25 +1490,44 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
   };
 
   const confirmDelete = async () => {
-    if (!deleteConfirmation) return;
+    if (!deleteConfirmation || isDeletingRef.current) return;
     
-    const allWorks = await storage.getWorks();
-    const filtered = allWorks.filter(w => String(w.id) !== String(deleteConfirmation.id));
-    await storage.saveWorks(filtered);
-
-    onRefresh();
-    setDeleteConfirmation(null);
+    isDeletingRef.current = true;
+    setIsDeleting(true);
+    try {
+      await storage.deleteWork(deleteConfirmation.id);
+      setDeleteConfirmation(null);
+    } catch (error) {
+      console.error("Error deleting work:", error);
+      alert("Erro ao excluir obra.");
+    } finally {
+      isDeletingRef.current = false;
+      setIsDeleting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allWorks = await storage.getWorks();
+    if (isSubmittingRef.current) return;
     
-    if (editingWork) {
-      const index = allWorks.findIndex(w => String(w.id) === String(editingWork.id));
-      if (index !== -1) {
-        allWorks[index] = {
-          ...allWorks[index],
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    try {
+      let workToSave: Work;
+      
+      if (editingWork) {
+        workToSave = {
+          ...editingWork,
+          name: formData.name,
+          city: formData.city,
+          address: formData.address,
+          lat: formData.lat ? parseFloat(formData.lat) : undefined,
+          lng: formData.lng ? parseFloat(formData.lng) : undefined,
+          radius: formData.radius ? parseInt(formData.radius) : undefined
+        };
+      } else {
+        workToSave = {
+          id: crypto.randomUUID(),
           name: formData.name,
           city: formData.city,
           address: formData.address,
@@ -1426,24 +1536,18 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
           radius: formData.radius ? parseInt(formData.radius) : undefined
         };
       }
-    } else {
-      const newWork: Work = {
-        id: crypto.randomUUID(),
-        name: formData.name,
-        city: formData.city,
-        address: formData.address,
-        lat: formData.lat ? parseFloat(formData.lat) : undefined,
-        lng: formData.lng ? parseFloat(formData.lng) : undefined,
-        radius: formData.radius ? parseInt(formData.radius) : undefined
-      };
-      allWorks.push(newWork);
-    }
 
-    await storage.saveWorks(allWorks);
-    setIsModalOpen(false);
-    onRefresh();
-    setFormData({ name: '', city: '', address: '', lat: '', lng: '', radius: '' });
-    setEditingWork(null);
+      await storage.saveWork(workToSave);
+      setIsModalOpen(false);
+      setFormData({ name: '', city: '', address: '', lat: '', lng: '', radius: '' });
+      setEditingWork(null);
+    } catch (error) {
+      console.error("Error saving work:", error);
+      alert("Erro ao salvar obra.");
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -1493,24 +1597,24 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
             <p className="text-red-500 font-bold">Esta obra possui registros vinculados. Excluir mesmo assim?</p>
           )}
           <div className="flex gap-4 pt-4">
-            <Button onClick={() => setDeleteConfirmation(null)} variant="secondary" className="w-full">Cancelar</Button>
-            <Button onClick={confirmDelete} className="w-full bg-red-600 hover:bg-red-700">Excluir Obra</Button>
+            <Button onClick={() => setDeleteConfirmation(null)} variant="secondary" className="w-full" disabled={isDeleting}>Cancelar</Button>
+            <Button onClick={confirmDelete} className="w-full bg-red-600 hover:bg-red-700" loading={isDeleting}>Excluir Obra</Button>
           </div>
         </div>
       </Modal>
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingWork ? "Editar Obra" : "Nova Obra"}>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Input label="Nome da Obra" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required />
-          <Input label="Cidade" value={formData.city} onChange={e => setFormData({ ...formData, city: e.target.value })} required />
-          <Input label="Endereço" value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} required />
+          <Input label="Nome da Obra" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required disabled={isSubmitting} />
+          <Input label="Cidade" value={formData.city} onChange={e => setFormData({ ...formData, city: e.target.value })} required disabled={isSubmitting} />
+          <Input label="Endereço" value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} required disabled={isSubmitting} />
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Latitude" value={formData.lat} onChange={e => setFormData({ ...formData, lat: e.target.value })} required />
-            <Input label="Longitude" value={formData.lng} onChange={e => setFormData({ ...formData, lng: e.target.value })} required />
+            <Input label="Latitude" value={formData.lat} onChange={e => setFormData({ ...formData, lat: e.target.value })} required disabled={isSubmitting} />
+            <Input label="Longitude" value={formData.lng} onChange={e => setFormData({ ...formData, lng: e.target.value })} required disabled={isSubmitting} />
           </div>
-          <Input label="Raio Permitido (metros)" type="number" value={formData.radius} onChange={e => setFormData({ ...formData, radius: e.target.value })} required />
+          <Input label="Raio Permitido (metros)" type="number" value={formData.radius} onChange={e => setFormData({ ...formData, radius: e.target.value })} required disabled={isSubmitting} />
           <div className="pt-4">
-            <Button type="submit" className="w-full py-3">{editingWork ? 'Salvar Alterações' : 'Cadastrar Obra'}</Button>
+            <Button type="submit" className="w-full py-3" loading={isSubmitting}>{editingWork ? 'Salvar Alterações' : 'Cadastrar Obra'}</Button>
           </div>
         </form>
       </Modal>
@@ -2815,7 +2919,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [tempPos, setTempPos] = useState<any>(null);
 
   const loadTodayPoint = useCallback(async () => {
-    const data = await storage.getPoints();
+    const data = await storage.getPoints(user.id);
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
     const todayPoint = data.find((p: any) => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === today);
     setPoint(todayPoint || null);
@@ -2892,7 +2996,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       setStatus('saving');
 
       // Local Registration Logic
-      const allPoints = await storage.getPoints();
+      const allPoints = await storage.getPoints(user.id);
       let point = allPoints.find(p => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === dataLocal);
       
       if (!point) {
@@ -2994,7 +3098,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setIsPauseModalOpen(false);
     setLoading(true);
     
-    const allPoints = await storage.getPoints();
+    const allPoints = await storage.getPoints(user.id);
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
     const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
     

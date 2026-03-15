@@ -2,7 +2,58 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: Firebase Auth UID
+    // Fields:
+    //   - id: string (optional)
+    //   - name: string
+    //   - username: string
+    //   - role: string ('admin_master', 'admin', 'funcionario')
+    //   - role_name: string
+    //   - phone: string
+    //   - cargo: string (optional)
+    //   - telefone: string (optional)
+    //   - valor_diaria: number (optional)
+    //   - status: string ('ativo', 'inativo') (optional)
+    //   - senha: string (optional)
+    //
+    // Collection: works
+    // Document ID: UUID
+    // Fields:
+    //   - id: string
+    //   - name: string
+    //   - city: string
+    //   - address: string
+    //   - lat: number
+    //   - lng: number
+    //   - radius: number
+    //
+    // Collection: points
+    // Document ID: UUID
+    // Fields:
+    //   - id: string
+    //   - user_id: string (Firebase Auth UID)
+    //   - funcionario_id: string (Firebase Auth UID)
+    //   - user_name: string
+    //   - date: string
+    //   - work_id: string
+    //   - e1, s1, e2, s2: string
+    //   - e1_lat, e1_lng, e1_acc, e1_address, e1_dist, e1_status, e1_suspeito: various
+    //   - total_hours: number
+    //   - obs: string
+    //   - editado_manual: number
+    //   - encerrado: number
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,31 +62,133 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    function isDocOwnerCreate() {
+      return isAuthenticated() && request.auth.uid == request.resource.data.user_id;
+    }
+
     function isAdmin() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'admin_master'];
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin_master', 'admin'] ||
+        (request.auth.token.email == "steeh.engenharia@gmail.com" && request.auth.token.email_verified == true)
+      );
     }
 
-    // Collection: users
+    function hasOnlyAllowedFields(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+             request.resource.data[field].size() >= minLen &&
+             request.resource.data[field].size() <= maxLen;
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser() {
+      return hasOnlyAllowedFields(['id', 'name', 'username', 'role', 'role_name', 'phone', 'cargo', 'telefone', 'valor_diaria', 'status', 'senha']) &&
+             isValidOptionalString('id', 1, 100) &&
+             validStringLength('name', 1, 100) &&
+             validStringLength('username', 1, 50) &&
+             request.resource.data.role in ['admin_master', 'admin', 'funcionario'] &&
+             isValidOptionalString('role_name', 0, 50) &&
+             isValidOptionalString('phone', 0, 20) &&
+             isValidOptionalString('cargo', 0, 50) &&
+             isValidOptionalString('telefone', 0, 20) &&
+             (!('valor_diaria' in request.resource.data) || request.resource.data.valor_diaria is number) &&
+             (!('status' in request.resource.data) || request.resource.data.status in ['ativo', 'inativo']) &&
+             isValidOptionalString('senha', 0, 100);
+    }
+
+    function isValidWork() {
+      return hasOnlyAllowedFields(['id', 'name', 'city', 'address', 'lat', 'lng', 'radius']) &&
+             isValidOptionalString('id', 1, 100) &&
+             validStringLength('name', 1, 100) &&
+             validStringLength('city', 1, 100) &&
+             validStringLength('address', 1, 200) &&
+             (!('lat' in request.resource.data) || request.resource.data.lat is number) &&
+             (!('lng' in request.resource.data) || request.resource.data.lng is number) &&
+             (!('radius' in request.resource.data) || request.resource.data.radius is number);
+    }
+
+    function isValidPoint() {
+      // Due to the large number of fields in points, we do basic validation for security
+      // and prevent massive payloads.
+      return request.resource.data.user_id is string &&
+             request.resource.data.user_id.size() < 100 &&
+             request.resource.data.date is string &&
+             request.resource.data.date.size() == 10 &&
+             isValidOptionalString('funcionario_id', 0, 100) &&
+             isValidOptionalString('user_name', 0, 100) &&
+             isValidOptionalString('e1', 0, 10) &&
+             isValidOptionalString('s1', 0, 10) &&
+             isValidOptionalString('e2', 0, 10) &&
+             isValidOptionalString('s2', 0, 10) &&
+             isValidOptionalString('e1_address', 0, 500) &&
+             isValidOptionalString('s1_address', 0, 500) &&
+             isValidOptionalString('e2_address', 0, 500) &&
+             isValidOptionalString('s2_address', 0, 500) &&
+             isValidOptionalString('e1_status', 0, 100) &&
+             isValidOptionalString('s1_status', 0, 100) &&
+             isValidOptionalString('e2_status', 0, 100) &&
+             isValidOptionalString('s2_status', 0, 100) &&
+             isValidOptionalString('e1_gps_status', 0, 100) &&
+             isValidOptionalString('s1_gps_status', 0, 100) &&
+             isValidOptionalString('e2_gps_status', 0, 100) &&
+             isValidOptionalString('s2_gps_status', 0, 100) &&
+             isValidOptionalString('e1_obra', 0, 100) &&
+             isValidOptionalString('e2_obra', 0, 100) &&
+             (!('obs' in request.resource.data) || (request.resource.data.obs is string && request.resource.data.obs.size() < 1000));
+    }
+
+    // ===============================================================
+    // Collections
+    // ===============================================================
+
     match /users/{userId} {
-      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow create: if isAuthenticated() && isOwner(userId);
-      allow update: if isAuthenticated() && isOwner(userId);
-    }
-
-    // Collection: works
-    match /works/{workId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin();
-      allow update: if isAdmin();
+      // Users can read their own profile, admins can read all
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Users can create their own profile on first login (as funcionario)
+      allow create: if (isOwner(userId) && request.resource.data.role == 'funcionario' && isValidUser()) || (isAdmin() && isValidUser());
+      
+      allow update: if isAdmin() && isValidUser();
       allow delete: if isAdmin();
     }
 
-    // Collection: points
+    match /works/{workId} {
+      // All authenticated users need to read works to select them
+      allow read: if isAuthenticated();
+      
+      // Only admins can manage works
+      allow create, update: if isAdmin() && isValidWork();
+      allow delete: if isAdmin();
+    }
+
     match /points/{pointId} {
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.user_id || isAdmin());
-      allow create: if isAuthenticated() && request.resource.data.user_id == request.auth.uid;
-      allow update: if isAuthenticated() && (request.auth.uid == resource.data.user_id || isAdmin());
+      // Users can read their own points, admins can read all
+      allow read: if isDocOwner() || isAdmin();
+      
+      // Users can create their own points, admins can create any
+      allow create: if (isDocOwnerCreate() && isValidPoint()) || (isAdmin() && isValidPoint());
+      
+      // Users can update their own points, admins can update any
+      allow update: if (isDocOwner() && isDocOwnerCreate() && isValidPoint()) || (isAdmin() && isValidPoint());
+      
+      // Only admins can delete points
       allow delete: if isAdmin();
     }
   }
