@@ -489,6 +489,8 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
+      if (user.role === 'funcionario') setView('employee');
+      else setView('dashboard');
       refreshData();
     }
   }, [user, refreshData]);
@@ -510,7 +512,7 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">Carregando...</div>;
 
-  if (!user) return <LoginPage onLogin={handleLogin} />;
+  if (!user) return <LoginPage />;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex font-sans">
@@ -657,7 +659,7 @@ function SidebarItem({ active, icon, label, onClick }: { active: boolean, icon: 
 
 // --- Views ---
 
-function LoginPage({ onLogin }: { onLogin: (u: UserData) => void }) {
+function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -671,21 +673,26 @@ function LoginPage({ onLogin }: { onLogin: (u: UserData) => void }) {
     try {
       // Firebase Auth expects email. If username is not an email, append a default domain.
       const email = username.includes('@') ? username : `${username}@areng.com`;
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      
-      const funcionarios = await storage.getUsers();
-      const usuarioEncontrado = funcionarios.find(
-        (f: UserData) => f.username === username
-      );
-
-      if (usuarioEncontrado) {
-        onLogin(usuarioEncontrado);
-      } else {
-        setError('Usuário não encontrado no banco de dados');
-      }
+      await signInWithEmailAndPassword(auth, email, password);
+      // No need to manually call onLogin here, onAuthStateChanged in App will handle it.
     } catch (e: any) {
       console.error("Erro de autenticação:", e);
-      setError('Usuário ou senha inválidos');
+      switch (e.code) {
+        case 'auth/user-not-found':
+          setError('Usuário não encontrado.');
+          break;
+        case 'auth/wrong-password':
+          setError('Senha incorreta.');
+          break;
+        case 'auth/invalid-email':
+          setError('E-mail inválido.');
+          break;
+        case 'auth/user-disabled':
+          setError('Usuário desativado.');
+          break;
+        default:
+          setError('Erro ao realizar login. Verifique suas credenciais.');
+      }
     }
     setLoading(false);
   };
