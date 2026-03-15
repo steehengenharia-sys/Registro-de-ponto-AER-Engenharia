@@ -36,7 +36,7 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy } from 'firebase/firestore';
 
 // --- Storage Helper (Now using Firestore) ---
 
@@ -142,6 +142,13 @@ const storage = {
       await setDoc(doc(db, 'points', String(point.id)), point);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
+    }
+  },
+  deletePoint: async (id: string | number) => {
+    try {
+      await deleteDoc(doc(db, 'points', String(id)));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `points/${id}`);
     }
   },
 };
@@ -518,33 +525,10 @@ export default function App() {
     
     const isFuncionario = user.role === 'funcionario';
     
-    const pData = await storage.getPoints(isFuncionario ? user.id : undefined);
     const uData = await storage.getUsers(isFuncionario ? user.id : undefined);
 
-    // Recalculate total_hours for all points
-    const updatedPoints: PointRecord[] = [];
-    const recalculated = pData.map(p => {
-      const newTotal = calculateHours(p);
-      if (Math.abs(newTotal - (p.total_hours || 0)) > 0.01) {
-        const updatedPoint = { ...p, total_hours: newTotal };
-        updatedPoints.push(updatedPoint);
-        return updatedPoint;
-      }
-      return p;
-    });
-    
-    if (updatedPoints.length > 0) {
-      // Only save updated points
-      for (const p of updatedPoints) {
-        await storage.savePoint(p);
-      }
-    }
-
     if (!isFuncionario) {
-      setPoints(recalculated);
       setUsers(uData);
-    } else {
-      setPoints(recalculated);
     }
   }, [user]);
 
@@ -561,9 +545,43 @@ export default function App() {
       }, (error) => {
         console.error("Error listening to works:", error);
       });
+
+      // Real-time listener for points
+      let q = query(collection(db, 'points'), orderBy('date', 'desc'));
+      if (user.role === 'funcionario') {
+        q = query(collection(db, 'points'), where('user_id', '==', user.id), orderBy('date', 'desc'));
+      }
+      
+      const unsubscribePoints = onSnapshot(q, async (snapshot) => {
+        const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PointRecord));
+        
+        // Recalculate total_hours for all points
+        const updatedPoints: PointRecord[] = [];
+        const recalculated = pData.map(p => {
+          const newTotal = calculateHours(p);
+          if (Math.abs(newTotal - (p.total_hours || 0)) > 0.01) {
+            const updatedPoint = { ...p, total_hours: newTotal };
+            updatedPoints.push(updatedPoint);
+            return updatedPoint;
+          }
+          return p;
+        });
+        
+        if (updatedPoints.length > 0) {
+          // Only save updated points
+          for (const p of updatedPoints) {
+            await storage.savePoint(p);
+          }
+        }
+        
+        setPoints(recalculated);
+      }, (error) => {
+        console.error("Error listening to points:", error);
+      });
       
       return () => {
         unsubscribeWorks();
+        unsubscribePoints();
       };
     }
   }, [user, refreshData]);
@@ -1768,12 +1786,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
   const executeDelete = async () => {
     if (!pointToDelete) return;
-    const allPoints = await storage.getPoints();
-    const filtered = allPoints.filter(p => String(p.id) !== String(pointToDelete));
-    await storage.savePoints(filtered);
-    setIsDeleteModalOpen(false);
-    setPointToDelete(null);
-    onRefresh();
+    try {
+      await storage.deletePoint(pointToDelete);
+      setIsDeleteModalOpen(false);
+      setPointToDelete(null);
+      await onRefresh();
+    } catch (error) {
+      console.error("Error deleting point:", error);
+      alert("Erro ao excluir registro.");
+    }
   };
 
   const handleEditPoint = (p: PointRecord) => {
