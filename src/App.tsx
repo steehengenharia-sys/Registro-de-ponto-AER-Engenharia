@@ -298,6 +298,7 @@ interface PointRecord {
   total_hours: number;
   editado_manual?: number;
   encerrado?: number;
+  manual_status?: 'TRABALHANDO' | 'PAUSADO' | 'ENCERRADO';
 }
 
 // --- Helpers ---
@@ -324,27 +325,20 @@ const calculateCostForUser = (totalHours: number, valorDiaria: number) => {
  * issue with Vite's HMR in this environment and does not affect the application's functionality.
  */
 
+const calculateWorkStatus = (p: PointRecord | null): string => {
+  if (p?.manual_status) return p.manual_status;
+  if (!p || !p.e1) return "NÃO INICIADO";
+  if (p.s1) return "ENCERRADO";
+  if (p.e1) return "TRABALHANDO";
+  return "NÃO INICIADO";
+};
+
 const getPointStatus = (p: PointRecord | null) => {
-  if (!p || !p.e1) return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
-  
-  // If it's closed (has S2 or manually closed)
-  if (p.s2 || p.encerrado) return { label: 'ENCERRADO', since: p.s2 || p.s1 || p.e1, color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  
-  // Manual edit with S1 is also closed
-  if (p.editado_manual && p.s1) return { label: 'ENCERRADO', since: p.s1, color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-
-  // Check for "SEM SAÍDA" - if they have an entry but no exit and it's late (after 18h)
-  const isLate = new Date().getHours() >= 18;
-  const missingExit = (p.e1 && !p.s1) || (p.e2 && !p.s2);
-  
-  if (missingExit && isLate) {
-    return { label: 'SEM SAÍDA', since: p.e2 || p.e1, color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  }
-
-  if (p.e2) return { label: 'EM ANDAMENTO', since: p.e2, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
-  if (p.s1) return { label: 'EM PAUSA', since: p.s1, color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  
-  return { label: 'EM ANDAMENTO', since: p.e1, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  const status = calculateWorkStatus(p);
+  if (status === 'ENCERRADO') return { label: 'ENCERRADO', since: p?.s2 || p?.s1 || p?.e1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === 'PAUSADO') return { label: 'PAUSADO', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === 'TRABALHANDO') return { label: 'TRABALHANDO', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
 
 // --- Components ---
@@ -1078,17 +1072,9 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
               <tbody className="divide-y divide-slate-800/50">
                 {recentPoints.length > 0 ? recentPoints.map((p, index) => {
                   const statusInfo = getPointStatus(p);
-                  let statusLabel = "Trabalhando";
-                  let statusColor = "text-emerald-500 bg-emerald-500/10 border-emerald-500/20";
+                  const statusLabel = statusInfo.label === 'TRABALHANDO' ? 'Trabalhando' : statusInfo.label === 'PAUSADO' ? 'Pausado' : statusInfo.label === 'ENCERRADO' ? 'Encerrado' : 'Não iniciado';
+                  const statusColor = `${statusInfo.color} ${statusInfo.bg} ${statusInfo.border}`;
                   
-                  if (statusInfo.label === 'ENCERRADO') {
-                    statusLabel = "Encerrado";
-                    statusColor = "text-slate-400 bg-slate-800 border-slate-700";
-                  } else if (statusInfo.label === 'SEM SAÍDA') {
-                    statusLabel = "Sem saída";
-                    statusColor = "text-amber-500 bg-amber-500/10 border-amber-500/20";
-                  }
-
                   return (
                     <tr key={p.id} className="hover:bg-slate-800/40 transition-colors group">
                       <td className="px-6 py-4 text-center text-[10px] font-black text-slate-600 group-hover:text-slate-400">
@@ -1120,9 +1106,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                       <td className="px-6 py-4">
                         <div className="flex justify-center">
                           <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded border ${statusColor}`}>
-                            {statusLabel === "Sem saída" && <AlertCircle size={10} />}
                             <span className="text-[10px] font-black uppercase tracking-wider">
-                              {statusLabel === "Sem saída" ? "⚠ Sem saída" : statusLabel}
+                              {statusLabel}
                             </span>
                           </div>
                         </div>
@@ -1144,16 +1129,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
           <div className="md:hidden flex flex-col divide-y divide-slate-800">
             {recentPoints.length > 0 ? recentPoints.map((p, index) => {
               const statusInfo = getPointStatus(p);
-              let statusLabel = "Trabalhando";
-              let statusColor = "text-emerald-500 bg-emerald-500/10 border-emerald-500/20";
-              
-              if (statusInfo.label === 'ENCERRADO') {
-                statusLabel = "Encerrado";
-                statusColor = "text-slate-400 bg-slate-800 border-slate-700";
-              } else if (statusInfo.label === 'SEM SAÍDA') {
-                statusLabel = "Sem saída";
-                statusColor = "text-amber-500 bg-amber-500/10 border-amber-500/20";
-              }
+              const statusLabel = statusInfo.label === 'TRABALHANDO' ? 'Trabalhando' : statusInfo.label === 'PAUSADO' ? 'Pausado' : statusInfo.label === 'ENCERRADO' ? 'Encerrado' : 'Não iniciado';
+              const statusColor = `${statusInfo.color} ${statusInfo.bg} ${statusInfo.border}`;
 
               return (
                 <div key={p.id} className="p-4 space-y-3">
@@ -1173,7 +1150,6 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                       </div>
                     </div>
                     <div className={`flex items-center gap-1 px-2 py-1 rounded border ${statusColor}`}>
-                      {statusLabel === "Sem saída" && <AlertCircle size={10} />}
                       <span className="text-[9px] font-black uppercase tracking-wider">
                         {statusLabel}
                       </span>
@@ -2389,6 +2365,19 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <Input label="Obra Turno 1" value={editFormData.e1_obra || ''} onChange={e => setEditFormData({ ...editFormData, e1_obra: e.target.value })} />
               <Input label="Obra Turno 2" value={editFormData.e2_obra || ''} onChange={e => setEditFormData({ ...editFormData, e2_obra: e.target.value })} />
             </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status Manual</label>
+              <select 
+                value={editFormData.manual_status || ''} 
+                onChange={e => setEditFormData({ ...editFormData, manual_status: e.target.value as any })}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
+              >
+                <option value="">Automático</option>
+                <option value="TRABALHANDO">Trabalhando</option>
+                <option value="PAUSADO">Pausado</option>
+                <option value="ENCERRADO">Encerrado</option>
+              </select>
+            </div>
 
             <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700 space-y-4">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Coordenadas GPS (Opcional)</p>
@@ -2444,8 +2433,23 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <Input label="Entrada 2" value={manualFormData.e2} onChange={e => setManualFormData({ ...manualFormData, e2: e.target.value })} placeholder="00:00" />
             <Input label="Saída 2" value={manualFormData.s2} onChange={e => setManualFormData({ ...manualFormData, s2: e.target.value })} placeholder="00:00" />
           </div>
+          <div className="grid grid-cols-2 gap-4">
             <Input label="Obra Turno 1" value={manualFormData.e1_obra} onChange={e => setManualFormData({ ...manualFormData, e1_obra: e.target.value })} />
             <Input label="Obra Turno 2" value={manualFormData.e2_obra} onChange={e => setManualFormData({ ...manualFormData, e2_obra: e.target.value })} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status Manual</label>
+            <select 
+              value={manualFormData.manual_status || ''} 
+              onChange={e => setManualFormData({ ...manualFormData, manual_status: e.target.value as any })}
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100"
+            >
+              <option value="">Automático</option>
+              <option value="TRABALHANDO">Trabalhando</option>
+              <option value="PAUSADO">Pausado</option>
+              <option value="ENCERRADO">Encerrado</option>
+            </select>
+          </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Observação</label>
             <textarea
@@ -3072,6 +3076,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       } else if (type === 's1') {
         point.s1 = horaLocal;
         point.s1_lat = lat; point.s1_lng = lng; point.s1_acc = acc; point.s1_address = address;
+        point.encerrado = 1;
       } else if (type === 'e2') {
         point.e2 = horaLocal;
         point.e2_lat = lat; point.e2_lng = lng; point.e2_acc = acc; point.e2_address = address;
@@ -3181,8 +3186,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
             <div className={`mb-8 p-4 rounded-2xl border ${status.bg} ${status.color} ${status.border} inline-flex flex-col items-center gap-1`}>
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">Status Atual</span>
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${status.label !== 'ENCERRADO' ? 'animate-pulse' : ''} ${status.label === 'EM PAUSA' ? 'bg-orange-500' : status.label === 'ENCERRADO' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
-                <span className="text-sm font-black">{status.label === 'EM PAUSA' ? 'Em Pausa' : status.label === 'ENCERRADO' ? 'Encerrado' : 'Trabalhando'}</span>
+                <div className={`w-2 h-2 rounded-full ${status.label !== 'ENCERRADO' ? 'animate-pulse' : ''} ${status.label === 'PAUSADO' ? 'bg-orange-500' : status.label === 'ENCERRADO' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
+                <span className="text-sm font-black">{status.label === 'PAUSADO' ? 'Pausado' : status.label === 'ENCERRADO' ? 'Encerrado' : 'Trabalhando'}</span>
               </div>
               {point?.work_name && (
                 <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {point.work_name}</span>
