@@ -678,11 +678,10 @@ function LoginPage() {
     } catch (e: any) {
       console.error("Erro de autenticação:", e);
       switch (e.code) {
+        case 'auth/invalid-credential':
         case 'auth/user-not-found':
-          setError('Usuário não encontrado.');
-          break;
         case 'auth/wrong-password':
-          setError('Senha incorreta.');
+          setError('Usuário ou senha inválidos.');
           break;
         case 'auth/invalid-email':
           setError('E-mail inválido.');
