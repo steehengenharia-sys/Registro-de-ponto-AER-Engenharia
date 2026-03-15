@@ -669,12 +669,9 @@ function LoginPage({ onLogin }: { onLogin: (u: UserData) => void }) {
     setError('');
     
     try {
-      // Firebase Auth expects email, but current system uses username.
-      // We need to find the user by username first to get their email (or use username as email if configured)
-      // Since we don't have emails in UserData, let's assume username is the email for Firebase Auth
-      // or we need a mapping.
-      // Given the constraints, let's try to authenticate with username as email.
-      const userCredential = await signInWithEmailAndPassword(auth, username, password);
+      // Firebase Auth expects email. If username is not an email, append a default domain.
+      const email = username.includes('@') ? username : `${username}@areng.com`;
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
       
       const funcionarios = await storage.getUsers();
       const usuarioEncontrado = funcionarios.find(
