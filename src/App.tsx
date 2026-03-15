@@ -34,101 +34,88 @@ import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { auth, db } from './firebase';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc } from 'firebase/firestore';
 
-// --- Storage Helper ---
+// --- Storage Helper (Now using Firestore) ---
 
 const storage = {
-  getUsers: (): UserData[] => {
-    let data = localStorage.getItem('funcionarios');
-    let parsedData: any[] = [];
+  getUsers: async (): Promise<UserData[]> => {
     try {
-      parsedData = JSON.parse(data || '[]');
-      if (!Array.isArray(parsedData)) parsedData = [];
-    } catch (e) {
-      console.error("Erro ao ler funcionários do localStorage:", e);
-      parsedData = [];
-    }
-
-    // Rule: Ensure exactly one admin_master exists
-    let adminMasters = parsedData.filter(u => (u.nivel || u.nivel_acesso || u.role) === 'admin_master');
-    
-    if (adminMasters.length === 0) {
-      // Create mandatory default if none exists
-      const newAdminMaster = {
-        id: crypto.randomUUID(),
-        nome: "Administrador Master",
-        usuario: "adminmaster",
-        senha: "123456",
-        cargo: "Engenheiro Chefe",
-        nivel: "admin_master"
-      };
-      parsedData.push(newAdminMaster);
-      adminMasters = [newAdminMaster];
-    } else if (adminMasters.length > 1) {
-      // Keep only the first one, remove others
-      const firstAdminMaster = adminMasters[0];
-      parsedData = parsedData.filter(u => (u.nivel || u.nivel_acesso || u.role) !== 'admin_master' || u.id === firstAdminMaster.id);
-    }
-
-    // Save cleaned list back to localStorage
-    localStorage.setItem('funcionarios', JSON.stringify(parsedData));
-    
-    return parsedData.map((u: any) => ({
-      id: String(u.id),
-      username: u.usuario,
-      name: u.nome,
-      role: u.nivel || u.nivel_acesso || u.role,
-      role_name: u.cargo,
-      phone: u.telefone || '',
-      valor_diaria: u.valor_diaria,
-      senha: u.senha
-    })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  },
-  saveUsers: (users: UserData[]) => {
-    const raw = users.map(u => ({
-      id: u.id,
-      usuario: u.username,
-      nome: u.name,
-      nivel: u.role,
-      cargo: u.role_name,
-      telefone: u.phone,
-      valor_diaria: u.valor_diaria,
-      senha: u.senha
-    }));
-    localStorage.setItem('funcionarios', JSON.stringify(raw));
-  },
-  
-  getWorks: (): Work[] => {
-    try {
-      const data = localStorage.getItem('obras');
-      if (!data) {
-        localStorage.setItem('obras', JSON.stringify([]));
-        return [];
+      const querySnapshot = await getDocs(collection(db, 'users'));
+      const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserData));
+      
+      // Rule: Ensure exactly one admin_master exists
+      let adminMasters = users.filter(u => u.role === 'admin_master');
+      
+      if (adminMasters.length === 0) {
+        // Create mandatory default if none exists
+        const newAdminMaster: UserData = {
+          id: crypto.randomUUID(),
+          name: "Administrador Master",
+          username: "adminmaster",
+          role: "admin_master",
+          role_name: "Engenheiro Chefe",
+          phone: ""
+        };
+        await setDoc(doc(db, 'users', newAdminMaster.id), newAdminMaster);
+        users.push(newAdminMaster);
       }
-      const parsed = JSON.parse(data);
-      return Array.isArray(parsed) ? parsed.sort((a, b) => (a.name || '').localeCompare(b.name || '')) : [];
+      
+      return users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
-      console.error("Erro ao ler obras do localStorage:", e);
+      handleFirestoreError(e, OperationType.LIST, 'users');
       return [];
     }
   },
-  saveWorks: (works: Work[]) => localStorage.setItem('obras', JSON.stringify(works)),
-  
-  getPoints: (): PointRecord[] => {
-    try {
-      const data = localStorage.getItem('registros');
-      if (!data) {
-        localStorage.setItem('registros', JSON.stringify([]));
-        return [];
+  saveUsers: async (users: UserData[]) => {
+    for (const user of users) {
+      try {
+        await setDoc(doc(db, 'users', user.id), user);
+      } catch (e) {
+        handleFirestoreError(e, OperationType.WRITE, `users/${user.id}`);
       }
-      const parsed = JSON.parse(data);
-      return Array.isArray(parsed) ? parsed.sort((a, b) => (b.date || '').localeCompare(a.date || '')) : [];
+    }
+  },
+  
+  getWorks: async (): Promise<Work[]> => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'works'));
+      return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Work)).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
-      console.error("Erro ao ler registros do localStorage:", e);
+      handleFirestoreError(e, OperationType.LIST, 'works');
       return [];
     }
   },
-  savePoints: (points: PointRecord[]) => localStorage.setItem('registros', JSON.stringify(points)),
+  saveWorks: async (works: Work[]) => {
+    for (const work of works) {
+      try {
+        await setDoc(doc(db, 'works', work.id), work);
+      } catch (e) {
+        handleFirestoreError(e, OperationType.WRITE, `works/${work.id}`);
+      }
+    }
+  },
+  
+  getPoints: async (): Promise<PointRecord[]> => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'points'));
+      return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PointRecord)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.LIST, 'points');
+      return [];
+    }
+  },
+  savePoints: async (points: PointRecord[]) => {
+    for (const point of points) {
+      try {
+        await setDoc(doc(db, 'points', String(point.id)), point);
+      } catch (e) {
+        handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
+      }
+    }
+  },
 };
 
 // --- Utility Functions ---
@@ -174,7 +161,58 @@ function calculateHours(p: Partial<PointRecord>) {
   return total;
 }
 
-// --- Types ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+
 type Role = 'admin_master' | 'admin' | 'funcionario';
 
 interface UserData {
@@ -382,6 +420,7 @@ type ViewType = 'dashboard' | 'users' | 'points' | 'works' | 'employee' | 'histo
 
 export default function App() {
   const [user, setUser] = useState<UserData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewType>(() => {
     const savedView = localStorage.getItem('ar_current_view');
     return (savedView as ViewType) || 'dashboard';
@@ -391,11 +430,37 @@ export default function App() {
   const [users, setUsers] = useState<UserData[]>([]);
   const [works, setWorks] = useState<Work[]>([]);
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // User is signed in. Fetch user data from Firestore.
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setUser({ id: userDoc.id, ...userDoc.data() } as UserData);
+          } else {
+            // Handle case where user document doesn't exist
+            setUser(null);
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error);
+          setUser(null);
+        }
+      } else {
+        // User is signed out.
+        setUser(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const refreshData = useCallback(async () => {
     if (!user) return;
-    const pData = storage.getPoints();
-    const uData = storage.getUsers();
-    const wData = storage.getWorks();
+    const pData = await storage.getPoints();
+    const uData = await storage.getUsers();
+    const wData = await storage.getWorks();
 
     // Recalculate total_hours for all points
     let updated = false;
@@ -409,7 +474,7 @@ export default function App() {
     });
     
     if (updated) {
-      storage.savePoints(recalculated);
+      await storage.savePoints(recalculated);
     }
 
     if (user.role !== 'funcionario') {
@@ -432,26 +497,18 @@ export default function App() {
     localStorage.setItem('ar_current_view', view);
   }, [view]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('usuarioLogado');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setUser(parsed);
-      if (parsed.role === 'funcionario') setView('employee');
-    }
-  }, []);
-
   const handleLogin = (userData: UserData) => {
     setUser(userData);
-    localStorage.setItem('usuarioLogado', JSON.stringify(userData));
     if (userData.role === 'funcionario') setView('employee');
     else setView('dashboard');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOut(auth);
     setUser(null);
-    localStorage.removeItem('usuarioLogado');
   };
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">Carregando...</div>;
 
   if (!user) return <LoginPage onLogin={handleLogin} />;
 
@@ -611,18 +668,26 @@ function LoginPage({ onLogin }: { onLogin: (u: UserData) => void }) {
     setLoading(true);
     setError('');
     
-    // Simulate network delay
-    await new Promise(r => setTimeout(r, 500));
+    try {
+      // Firebase Auth expects email, but current system uses username.
+      // We need to find the user by username first to get their email (or use username as email if configured)
+      // Since we don't have emails in UserData, let's assume username is the email for Firebase Auth
+      // or we need a mapping.
+      // Given the constraints, let's try to authenticate with username as email.
+      const userCredential = await signInWithEmailAndPassword(auth, username, password);
+      
+      const funcionarios = await storage.getUsers();
+      const usuarioEncontrado = funcionarios.find(
+        (f: UserData) => f.username === username
+      );
 
-    const funcionarios = storage.getUsers();
-    
-    const usuarioEncontrado = funcionarios.find(
-      (f: UserData) => f.username === username && f.senha === password
-    );
-
-    if (usuarioEncontrado) {
-      onLogin(usuarioEncontrado);
-    } else {
+      if (usuarioEncontrado) {
+        onLogin(usuarioEncontrado);
+      } else {
+        setError('Usuário não encontrado no banco de dados');
+      }
+    } catch (e: any) {
+      console.error("Erro de autenticação:", e);
       setError('Usuário ou senha inválidos');
     }
     setLoading(false);
@@ -1083,14 +1148,14 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
   const confirmDelete = async () => {
     if (!deleteConfirmation) return;
     
-    const allUsers = storage.getUsers();
+    const allUsers = await storage.getUsers();
     const filtered = allUsers.filter(u => String(u.id) !== String(deleteConfirmation.id));
-    storage.saveUsers(filtered);
+    await storage.saveUsers(filtered);
     
     // Also delete their points
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const filteredPoints = allPoints.filter(p => String(p.user_id) !== String(deleteConfirmation.id));
-    storage.savePoints(filteredPoints);
+    await storage.savePoints(filteredPoints);
 
     onRefresh();
     setDeleteConfirmation(null);
@@ -1107,7 +1172,7 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
       return;
     }
 
-    const allUsers = storage.getUsers();
+    const allUsers = await storage.getUsers();
     
     // Rule: Only one admin_master allowed
     if (formData.nivel === 'admin_master') {
@@ -1153,7 +1218,7 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
       allUsers.push(newUser);
     }
 
-    storage.saveUsers(allUsers);
+    await storage.saveUsers(allUsers);
     alert(editingUser ? "Funcionário atualizado" : "Funcionário cadastrado com sucesso");
     setIsModalOpen(false);
     onRefresh();
@@ -1300,7 +1365,7 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
       return;
     }
 
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const hasLinkedPoints = allPoints.some((p: any) => String(p.work_id) === String(id));
 
     setDeleteConfirmation({ id, show: true, hasLinkedPoints });
@@ -1309,9 +1374,9 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
   const confirmDelete = async () => {
     if (!deleteConfirmation) return;
     
-    const allWorks = storage.getWorks();
+    const allWorks = await storage.getWorks();
     const filtered = allWorks.filter(w => String(w.id) !== String(deleteConfirmation.id));
-    storage.saveWorks(filtered);
+    await storage.saveWorks(filtered);
 
     onRefresh();
     setDeleteConfirmation(null);
@@ -1319,7 +1384,7 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allWorks = storage.getWorks();
+    const allWorks = await storage.getWorks();
     
     if (editingWork) {
       const index = allWorks.findIndex(w => String(w.id) === String(editingWork.id));
@@ -1347,7 +1412,7 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
       allWorks.push(newWork);
     }
 
-    storage.saveWorks(allWorks);
+    await storage.saveWorks(allWorks);
     setIsModalOpen(false);
     onRefresh();
     setFormData({ name: '', city: '', address: '', lat: '', lng: '', radius: '' });
@@ -1496,7 +1561,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
   const saveManualPoint = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const userObj = users.find(u => String(u.id) === String(manualFormData.user_id));
     
     const newPoint: PointRecord = {
@@ -1522,7 +1587,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
     newPoint.total_hours = calculateHours(newPoint);
     allPoints.push(newPoint);
-    storage.savePoints(allPoints);
+    await storage.savePoints(allPoints);
 
     setIsManualModalOpen(false);
     setManualFormData({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
@@ -1559,9 +1624,9 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
   const executeDelete = async () => {
     if (!pointToDelete) return;
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const filtered = allPoints.filter(p => String(p.id) !== String(pointToDelete));
-    storage.savePoints(filtered);
+    await storage.savePoints(filtered);
     setIsDeleteModalOpen(false);
     setPointToDelete(null);
     onRefresh();
@@ -1628,13 +1693,13 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
   const saveEditPoint = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
     if (index !== -1) {
       const updated = { ...editFormData, editado_manual: 1 };
       updated.total_hours = calculateHours(updated);
       allPoints[index] = updated;
-      storage.savePoints(allPoints);
+      await storage.savePoints(allPoints);
       setIsEditModalOpen(false);
       onRefresh();
     }
@@ -2722,8 +2787,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [lastRegisteredTime, setLastRegisteredTime] = useState('');
   const [tempPos, setTempPos] = useState<any>(null);
 
-  const loadTodayPoint = useCallback(() => {
-    const data = storage.getPoints();
+  const loadTodayPoint = useCallback(async () => {
+    const data = await storage.getPoints();
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
     const todayPoint = data.find((p: any) => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === today);
     setPoint(todayPoint || null);
@@ -2800,7 +2865,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       setStatus('saving');
 
       // Local Registration Logic
-      const allPoints = storage.getPoints();
+      const allPoints = await storage.getPoints();
       let point = allPoints.find(p => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === dataLocal);
       
       if (!point) {
@@ -2825,7 +2890,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       const lat = pos ? pos.coords.latitude : 0;
       const lng = pos ? pos.coords.longitude : 0;
       const acc = pos ? pos.coords.accuracy : 0;
-      const timestampLocalizacao = pos ? pos.timestamp : Date.now();
+      // const timestampLocalizacao = pos ? pos.timestamp : Date.now();
 
       if (type === 'e1') {
         point.e1 = horaLocal;
@@ -2878,7 +2943,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       
       point.total_hours = calculateHours(point);
       
-      storage.savePoints(allPoints);
+      await storage.savePoints(allPoints);
 
       setLastRegisteredTime(horaLocal);
       setShowSuccess(true);
@@ -2902,13 +2967,13 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setIsPauseModalOpen(false);
     setLoading(true);
     
-    const allPoints = storage.getPoints();
+    const allPoints = await storage.getPoints();
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
     const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
     
     if (index !== -1) {
       allPoints[index].encerrado = 1;
-      storage.savePoints(allPoints);
+      await storage.savePoints(allPoints);
       loadTodayPoint();
       onRefresh();
     }

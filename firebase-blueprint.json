@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a user in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin_master", "admin", "funcionario"] },
+        "role_name": { "type": "string" },
+        "phone": { "type": "string" },
+        "valor_diaria": { "type": "number" },
+        "senha": { "type": "string" }
+      },
+      "required": ["id", "username", "name", "role"]
+    },
+    "Work": {
+      "title": "Work",
+      "description": "Represents a construction site or work location.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "city": { "type": "string" },
+        "address": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "radius": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "PointRecord": {
+      "title": "PointRecord",
+      "description": "Represents a time record for a user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "funcionario_id": { "type": "string" },
+        "user_name": { "type": "string" },
+        "work_id": { "type": "string" },
+        "work_name": { "type": "string" },
+        "date": { "type": "string" },
+        "e1": { "type": "string" },
+        "s1": { "type": "string" },
+        "e2": { "type": "string" },
+        "s2": { "type": "string" },
+        "total_hours": { "type": "number" },
+        "obs": { "type": "string" },
+        "encerrado": { "type": "number" }
+      },
+      "required": ["id", "user_id", "date"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": { "$ref": "User" },
+      "description": "Collection of users."
+    },
+    "works": {
+      "schema": { "$ref": "Work" },
+      "description": "Collection of construction sites."
+    },
+    "points": {
+      "schema": { "$ref": "PointRecord" },
+      "description": "Collection of time records."
+    }
+  }
+}
