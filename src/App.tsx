@@ -108,12 +108,21 @@ const storage = {
     }
   },
   savePoints: async (points: PointRecord[]) => {
+    // Optimized to use batch or just individual calls if needed, 
+    // but for now let's keep it simple and just add a savePoint for single updates
     for (const point of points) {
       try {
         await setDoc(doc(db, 'points', String(point.id)), point);
       } catch (e) {
         handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
       }
+    }
+  },
+  savePoint: async (point: PointRecord) => {
+    try {
+      await setDoc(doc(db, 'points', String(point.id)), point);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
     }
   },
 };
@@ -435,15 +444,32 @@ export default function App() {
       if (firebaseUser) {
         // User is signed in. Fetch user data from Firestore.
         try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          const userDoc = await getDoc(userRef);
+          
           if (userDoc.exists()) {
             setUser({ id: userDoc.id, ...userDoc.data() } as UserData);
           } else {
-            // Handle case where user document doesn't exist
-            setUser(null);
+            // Create default user profile if it doesn't exist
+            const newUser: UserData = {
+              id: firebaseUser.uid,
+              username: firebaseUser.email?.split('@')[0] || 'usuario',
+              name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Usuário',
+              role: 'funcionario', // Default role
+              role_name: 'Funcionário',
+              phone: '',
+            };
+            await setDoc(userRef, {
+              username: newUser.username,
+              name: newUser.name,
+              role: newUser.role,
+              role_name: newUser.role_name,
+              phone: newUser.phone,
+            });
+            setUser(newUser);
           }
         } catch (error) {
-          console.error("Error fetching user data:", error);
+          console.error("Error fetching/creating user data:", error);
           setUser(null);
         }
       } else {
@@ -463,18 +489,22 @@ export default function App() {
     const wData = await storage.getWorks();
 
     // Recalculate total_hours for all points
-    let updated = false;
+    const updatedPoints: PointRecord[] = [];
     const recalculated = pData.map(p => {
       const newTotal = calculateHours(p);
       if (Math.abs(newTotal - (p.total_hours || 0)) > 0.01) {
-        updated = true;
-        return { ...p, total_hours: newTotal };
+        const updatedPoint = { ...p, total_hours: newTotal };
+        updatedPoints.push(updatedPoint);
+        return updatedPoint;
       }
       return p;
     });
     
-    if (updated) {
-      await storage.savePoints(recalculated);
+    if (updatedPoints.length > 0) {
+      // Only save updated points
+      for (const p of updatedPoints) {
+        await storage.savePoint(p);
+      }
     }
 
     if (user.role !== 'funcionario') {
@@ -498,12 +528,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('ar_current_view', view);
   }, [view]);
-
-  const handleLogin = (userData: UserData) => {
-    setUser(userData);
-    if (userData.role === 'funcionario') setView('employee');
-    else setView('dashboard');
-  };
 
   const handleLogout = async () => {
     await signOut(auth);
