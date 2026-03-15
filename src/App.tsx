@@ -734,6 +734,10 @@ function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!username || !password) {
+      setError('Por favor, preencha o usuário e a senha.');
+      return;
+    }
     setLoading(true);
     setError('');
     
@@ -743,7 +747,7 @@ function LoginPage() {
       await signInWithEmailAndPassword(auth, email, password);
       // No need to manually call onLogin here, onAuthStateChanged in App will handle it.
     } catch (e: any) {
-      console.error("Erro de autenticação:", e);
+      console.error("Erro de autenticação:", e.message || e);
       switch (e.code) {
         case 'auth/invalid-credential':
         case 'auth/user-not-found':
