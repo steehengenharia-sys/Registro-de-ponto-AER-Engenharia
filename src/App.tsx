@@ -1232,7 +1232,7 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
       const filteredPoints = allPoints.filter(p => String(p.user_id) !== String(deleteConfirmation.id));
       await storage.savePoints(filteredPoints);
   
-      onRefresh();
+      await onRefresh();
       setDeleteConfirmation(null);
     } catch (error) {
       console.error("Error deleting user:", error);
@@ -1277,12 +1277,12 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
         }
         const index = allUsers.findIndex(u => String(u.id) === String(editingUser.id));
         if (index !== -1) {
-          allUsers[index].username = formData.usuario;
-          allUsers[index].name = formData.nome;
-          allUsers[index].role = formData.nivel as Role;
-          allUsers[index].role_name = formData.cargo;
-          allUsers[index].phone = formData.telefone;
-          allUsers[index].valor_diaria = formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined;
+          allUsers[index].username = formData.usuario || "";
+          allUsers[index].name = formData.nome || "";
+          allUsers[index].role = (formData.nivel as Role) || "funcionario";
+          allUsers[index].role_name = formData.cargo || "";
+          allUsers[index].phone = formData.telefone || "";
+          allUsers[index].valor_diaria = formData.valor_diaria ? Number(formData.valor_diaria) : 0;
           
           if (formData.senha) allUsers[index].senha = formData.senha;
           
@@ -1301,13 +1301,13 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
           
           const newUser: UserData = {
             id: userCredential.user.uid,
-            username: formData.usuario,
-            senha: formData.senha,
-            name: formData.nome,
-            role: formData.nivel as Role,
-            role_name: formData.cargo,
-            phone: formData.telefone,
-            valor_diaria: formData.valor_diaria ? parseFloat(formData.valor_diaria.toString()) : undefined
+            username: formData.usuario || "",
+            senha: formData.senha || "",
+            name: formData.nome || "",
+            role: (formData.nivel as Role) || "funcionario",
+            role_name: formData.cargo || "",
+            phone: formData.telefone || "",
+            valor_diaria: formData.valor_diaria ? Number(formData.valor_diaria) : 0
           };
           
           await storage.saveUser(newUser);
@@ -1327,12 +1327,12 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
   
       alert(editingUser ? "Funcionário atualizado" : "Funcionário cadastrado com sucesso");
       setIsModalOpen(false);
-      onRefresh();
+      await onRefresh();
       setFormData({ usuario: '', senha: '', nome: '', nivel: 'funcionario', cargo: '', telefone: '', valor_diaria: '' });
       setEditingUser(null);
     } catch (error) {
       console.error("Error saving user:", error);
-      alert("Erro ao salvar usuário.");
+      alert("Erro ao salvar usuário. Verifique os campos.");
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
@@ -1496,6 +1496,7 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
     setIsDeleting(true);
     try {
       await storage.deleteWork(deleteConfirmation.id);
+      await onRefresh();
       setDeleteConfirmation(null);
     } catch (error) {
       console.error("Error deleting work:", error);
@@ -1518,32 +1519,33 @@ function WorksView({ user, works, onRefresh }: { user: UserData, works: Work[], 
       if (editingWork) {
         workToSave = {
           ...editingWork,
-          name: formData.name,
-          city: formData.city,
-          address: formData.address,
-          lat: formData.lat ? parseFloat(formData.lat) : undefined,
-          lng: formData.lng ? parseFloat(formData.lng) : undefined,
-          radius: formData.radius ? parseInt(formData.radius) : undefined
+          name: formData.name || "",
+          city: formData.city || "",
+          address: formData.address || "",
+          lat: formData.lat ? Number(formData.lat) : 0,
+          lng: formData.lng ? Number(formData.lng) : 0,
+          radius: formData.radius ? Number(formData.radius) : 0
         };
       } else {
         workToSave = {
           id: crypto.randomUUID(),
-          name: formData.name,
-          city: formData.city,
-          address: formData.address,
-          lat: formData.lat ? parseFloat(formData.lat) : undefined,
-          lng: formData.lng ? parseFloat(formData.lng) : undefined,
-          radius: formData.radius ? parseInt(formData.radius) : undefined
+          name: formData.name || "",
+          city: formData.city || "",
+          address: formData.address || "",
+          lat: formData.lat ? Number(formData.lat) : 0,
+          lng: formData.lng ? Number(formData.lng) : 0,
+          radius: formData.radius ? Number(formData.radius) : 0
         };
       }
 
       await storage.saveWork(workToSave);
       setIsModalOpen(false);
+      await onRefresh();
       setFormData({ name: '', city: '', address: '', lat: '', lng: '', radius: '' });
       setEditingWork(null);
     } catch (error) {
       console.error("Error saving work:", error);
-      alert("Erro ao salvar obra.");
+      alert("Erro ao salvar obra. Verifique os campos.");
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
@@ -1689,40 +1691,47 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [editFormData, setEditFormData] = useState<any>(null);
   const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const saveManualPoint = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allPoints = await storage.getPoints();
-    const userObj = users.find(u => String(u.id) === String(manualFormData.user_id));
-    
-    const newPoint: PointRecord = {
-      id: crypto.randomUUID(),
-      user_id: String(manualFormData.user_id),
-      funcionario_id: String(manualFormData.user_id),
-      user_name: userObj?.name || '---',
-      date: manualFormData.date,
-      e1: manualFormData.e1,
-      s1: manualFormData.s1,
-      e2: manualFormData.e2,
-      s2: manualFormData.s2,
-      e1_obra: manualFormData.e1_obra,
-      e2_obra: manualFormData.e2_obra,
-      obs: manualFormData.obs,
-      editado_manual: 1,
-      total_hours: 0,
-      e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
-      s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
-      e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
-      s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
-    };
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const allPoints = await storage.getPoints();
+      const userObj = users.find(u => String(u.id) === String(manualFormData.user_id));
+      
+      const newPoint: PointRecord = {
+        id: crypto.randomUUID(),
+        user_id: String(manualFormData.user_id),
+        funcionario_id: String(manualFormData.user_id),
+        user_name: userObj?.name || '---',
+        date: manualFormData.date,
+        e1: manualFormData.e1,
+        s1: manualFormData.s1,
+        e2: manualFormData.e2,
+        s2: manualFormData.s2,
+        e1_obra: manualFormData.e1_obra,
+        e2_obra: manualFormData.e2_obra,
+        obs: manualFormData.obs,
+        editado_manual: 1,
+        total_hours: 0,
+        e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
+        s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
+        e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
+        s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
+      };
 
-    newPoint.total_hours = calculateHours(newPoint);
-    allPoints.push(newPoint);
-    await storage.savePoints(allPoints);
+      newPoint.total_hours = calculateHours(newPoint);
+      allPoints.push(newPoint);
+      await storage.savePoints(allPoints);
 
-    setIsManualModalOpen(false);
-    setManualFormData({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
-    onRefresh();
+      setIsManualModalOpen(false);
+      setManualFormData({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
+      await onRefresh();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
   const [isWarningModalOpen, setIsWarningModalOpen] = useState(false);
   const [warningContent, setWarningContent] = useState<string[]>([]);
@@ -1824,15 +1833,21 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
   const saveEditPoint = async (e: React.FormEvent) => {
     e.preventDefault();
-    const allPoints = await storage.getPoints();
-    const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
-    if (index !== -1) {
-      const updated = { ...editFormData, editado_manual: 1 };
-      updated.total_hours = calculateHours(updated);
-      allPoints[index] = updated;
-      await storage.savePoints(allPoints);
-      setIsEditModalOpen(false);
-      onRefresh();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const allPoints = await storage.getPoints();
+      const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
+      if (index !== -1) {
+        const updated = { ...editFormData, editado_manual: 1 };
+        updated.total_hours = calculateHours(updated);
+        allPoints[index] = updated;
+        await storage.savePoints(allPoints);
+        setIsEditModalOpen(false);
+        onRefresh();
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2375,7 +2390,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               />
             </div>
             <div className="pt-4">
-              <Button type="submit" className="w-full py-3">Salvar Alterações</Button>
+              <Button type="submit" className="w-full py-3" loading={isSubmitting}>Salvar Alterações</Button>
             </div>
           </form>
         )}
