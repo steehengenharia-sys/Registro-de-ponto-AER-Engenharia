@@ -343,19 +343,18 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
 const calculateWorkStatus = (p: PointRecord | null): string => {
   if (p?.manual_status) return p.manual_status;
   if (!p || !p.e1) return "NÃO INICIADO";
-  if (p.encerrado) return "ENCERRADO";
-  if (p.s2) return "ENCERRADO";
+  if (p.encerrado || p.s2) return "JORNADA CONCLUÍDA";
   if (p.e2) return "TRABALHANDO";
-  if (p.s1) return "EM PAUSA";
+  if (p.s1) return "PAUSADO";
   if (p.e1) return "TRABALHANDO";
   return "NÃO INICIADO";
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === 'ENCERRADO') return { label: 'ENCERRADO', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === 'EM PAUSA') return { label: 'EM PAUSA', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  if (status === 'TRABALHANDO') return { label: 'TRABALHANDO', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  if (status === 'JORNADA CONCLUÍDA') return { label: 'Jornada concluída', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === 'PAUSADO') return { label: 'Pausado', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === 'TRABALHANDO') return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
   return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
 
@@ -3230,13 +3229,16 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
             <div className={`mb-8 p-4 rounded-2xl border ${status.bg} ${status.color} ${status.border} inline-flex flex-col items-center gap-1`}>
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">Status Atual</span>
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${status.label !== 'ENCERRADO' ? 'animate-pulse' : ''} ${status.label === 'PAUSADO' ? 'bg-orange-500' : status.label === 'ENCERRADO' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
-                <span className="text-sm font-black">{status.label === 'PAUSADO' ? 'Pausado' : status.label === 'ENCERRADO' ? 'Encerrado' : 'Trabalhando'}</span>
+                <div className={`w-2 h-2 rounded-full ${status.label !== 'Jornada concluída' ? 'animate-pulse' : ''} ${status.label === 'Pausado' ? 'bg-orange-500' : status.label === 'Jornada concluída' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
+                <span className="text-sm font-black">{status.label}</span>
               </div>
+              {status.label === 'Pausado' && (
+                <span className="text-[10px] font-bold uppercase tracking-widest mt-1 animate-pulse">Aguardando próximo turno</span>
+              )}
               {point?.work_name && (
                 <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {point.work_name}</span>
               )}
-              <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">{status.label === 'ENCERRADO' ? 'Último registro:' : 'Desde:'} {status.since}</span>
+              <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">{status.label === 'Jornada concluída' ? 'Último registro:' : 'Desde:'} {status.since}</span>
             </div>
           );
         })()}
@@ -3337,7 +3339,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           <p className="text-slate-300">Deseja encerrar a jornada ou iniciar um novo turno?</p>
           <div className="grid grid-cols-1 gap-3">
             <Button onClick={() => setIsPauseModalOpen(false)} variant="primary" className="w-full py-4">
-              Iniciar novo turno
+              Continuar jornada
             </Button>
             <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
               Encerrar jornada
