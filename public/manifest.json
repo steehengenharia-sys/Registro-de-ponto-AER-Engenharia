@@ -1,4 +1,4 @@
-{
+{{
   "name": "A&R Engenharia",
   "short_name": "Ponto AER",
   "display": "standalone",
@@ -7,12 +7,12 @@
   "theme_color": "#f97316",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/icon-512.png",
+      "src": "icon-192.png",
       "sizes": "512x512",
       "type": "image/png"
     }
