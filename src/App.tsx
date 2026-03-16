@@ -171,29 +171,30 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 function calculateHours(p: Partial<PointRecord>) {
-  const parseTime = (t: string | undefined) => {
-    if (!t) return null;
+  const parseTimeToMinutes = (t: string | undefined) => {
+    if (!t || !t.includes(':')) return null;
     const [h, m] = t.split(":").map(Number);
-    return h + m / 60;
+    if (isNaN(h) || isNaN(m)) return null;
+    return h * 60 + m;
   };
 
-  const e1 = parseTime(p.e1);
-  const s1 = parseTime(p.s1);
-  const e2 = parseTime(p.e2);
-  const s2 = parseTime(p.s2);
+  const e1 = parseTimeToMinutes(p.e1);
+  const s1 = parseTimeToMinutes(p.s1);
+  const e2 = parseTimeToMinutes(p.e2);
+  const s2 = parseTimeToMinutes(p.s2);
 
-  const calcDiff = (start: number | null, end: number | null) => {
+  const calcDiffMinutes = (start: number | null, end: number | null) => {
     if (start === null || end === null) return 0;
     let diff = end - start;
-    if (diff < 0) diff += 24;
+    if (diff < 0) diff += 24 * 60;
     return diff;
   };
 
-  let total = 0;
-  total += calcDiff(e1, s1);
-  total += calcDiff(e2, s2);
+  const totalMinutes = calcDiffMinutes(e1, s1) + calcDiffMinutes(e2, s2);
+  const decimalHours = totalMinutes / 60;
   
-  return total;
+  // Return with 2 decimal places as requested
+  return Math.round(decimalHours * 100) / 100;
 }
 
 enum OperationType {
@@ -549,11 +550,12 @@ export default function App() {
       const unsubscribePoints = onSnapshot(q, async (snapshot) => {
         const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PointRecord));
         
-        // Recalculate total_hours for all points
+        // Recalculate total_hours for all points to ensure consistency
         const updatedPoints: PointRecord[] = [];
         const recalculated = pData.map(p => {
           const newTotal = calculateHours(p);
-          if (Math.abs(newTotal - (p.total_hours || 0)) > 0.01) {
+          // Use a very small epsilon to detect any change
+          if (Math.abs(newTotal - (p.total_hours || 0)) > 0.001) {
             const updatedPoint = { ...p, total_hours: newTotal };
             updatedPoints.push(updatedPoint);
             return updatedPoint;
@@ -562,7 +564,7 @@ export default function App() {
         });
         
         if (updatedPoints.length > 0) {
-          // Only save updated points
+          // Update points in Firestore if calculation changed
           for (const p of updatedPoints) {
             await storage.savePoint(p);
           }
