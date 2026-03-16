@@ -1,6 +1,7 @@
 {{
   "name": "A&R Engenharia",
   "short_name": "Ponto AER",
+  "description": "Sistema de controle de ponto da A&R Engenharia",
   "display": "standalone",
   "start_url": "/",
   "background_color": "#020617",
