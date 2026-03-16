@@ -1,14 +1,15 @@
 {
-  "name": "A&R Engenharia",
+  "name": "A&R Engenharia - Controle de Ponto",
   "short_name": "Ponto AER",
   "description": "Sistema de controle de ponto da A&R Engenharia",
-  "display": "standalone",
   "start_url": "/",
   "scope": "/",
+  "display": "standalone",
   "lang": "pt-BR",
   "dir": "ltr",
   "background_color": "#020617",
   "theme_color": "#f97316",
+  "orientation": "portrait",
   "icons": [
     {
       "src": "/icon-192.png",
