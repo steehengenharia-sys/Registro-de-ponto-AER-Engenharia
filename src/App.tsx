@@ -170,7 +170,7 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c; // in metres
 }
 
-function calculateHours(p: Partial<PointRecord>) {
+function calcularHoras(p: Partial<PointRecord>) {
   const parseTimeToMinutes = (t: string | undefined) => {
     if (!t || !t.includes(':')) return null;
     const [h, m] = t.split(":").map(Number);
@@ -186,6 +186,7 @@ function calculateHours(p: Partial<PointRecord>) {
   const calcDiffMinutes = (start: number | null, end: number | null) => {
     if (start === null || end === null) return 0;
     let diff = end - start;
+    // If exit is before entry, assume it passed midnight
     if (diff < 0) diff += 24 * 60;
     return diff;
   };
@@ -194,7 +195,7 @@ function calculateHours(p: Partial<PointRecord>) {
   const decimalHours = totalMinutes / 60;
   
   // Return with 2 decimal places as requested
-  return Math.round(decimalHours * 100) / 100;
+  return Number(decimalHours.toFixed(2));
 }
 
 enum OperationType {
@@ -553,7 +554,7 @@ export default function App() {
         // Recalculate total_hours for all points to ensure consistency
         const updatedPoints: PointRecord[] = [];
         const recalculated = pData.map(p => {
-          const newTotal = calculateHours(p);
+          const newTotal = calcularHoras(p);
           // Use a very small epsilon to detect any change
           if (Math.abs(newTotal - (p.total_hours || 0)) > 0.001) {
             const updatedPoint = { ...p, total_hours: newTotal };
@@ -999,7 +1000,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       {/* 2. VISÃO GERAL (INDICADORES) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
         <Card className="p-3 md:p-8 flex flex-col items-center justify-center h-24 md:h-40 shadow-lg border-slate-700/50">
-          <p className="text-xl md:text-4xl font-black text-white tracking-tight">{dashboardData.totalHours.toFixed(1)}h</p>
+          <p className="text-xl md:text-4xl font-black text-white tracking-tight">{dashboardData.totalHours.toFixed(2)}h</p>
           <p className="text-[8px] md:text-[11px] font-bold text-slate-500 uppercase tracking-widest mt-1 md:mt-2 text-center">Total de Horas Hoje</p>
         </Card>
         
@@ -1038,7 +1039,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                 
                 <div className="pt-3 md:pt-4 border-t border-slate-800/50 flex justify-between items-end">
                   <div>
-                    <p className="text-sm md:text-base font-black text-white">{work.hours.toFixed(1)}h</p>
+                    <p className="text-sm md:text-base font-black text-white">{work.hours.toFixed(2)}h</p>
                     <p className="text-[8px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest">hoje</p>
                   </div>
                   <div className="text-right">
@@ -1102,7 +1103,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                       <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.s2 || p.s1 || '--:--'}</td>
                       <td className="px-6 py-4 text-right">
                         <span className="text-sm font-black text-white">
-                          {p.total_hours?.toFixed(1).replace('.', ',')} h
+                          {p.total_hours?.toFixed(2)} h
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -1172,7 +1173,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Horas</p>
-                      <p className="text-sm font-black text-orange-500">{p.total_hours?.toFixed(1).replace('.', ',')}h</p>
+                      <p className="text-sm font-black text-orange-500">{p.total_hours?.toFixed(2)}h</p>
                     </div>
                   </div>
                 </div>
@@ -1722,7 +1723,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
       };
 
-      newPoint.total_hours = calculateHours(newPoint);
+      newPoint.total_hours = calcularHoras(newPoint);
       allPoints.push(newPoint);
       await storage.savePoints(allPoints);
 
@@ -1843,7 +1844,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
       if (index !== -1) {
         const updated = { ...editFormData, editado_manual: 1 };
-        updated.total_hours = calculateHours(updated);
+        updated.total_hours = calcularHoras(updated);
         allPoints[index] = updated;
         await storage.savePoints(allPoints);
         setIsEditModalOpen(false);
@@ -2359,7 +2360,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex justify-between items-center">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Calculado:</span>
               <span className="text-lg font-black text-orange-500">
-                {calculateHours(editFormData).toFixed(2)}h
+                {calcularHoras(editFormData).toFixed(2)}h
               </span>
             </div>
 
@@ -3119,7 +3120,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       // Replicating the 3km/2min logic would require storing timestamps for each point.
       // For now, let's keep it simple or add timestamps to PointRecord.
       
-      point.total_hours = calculateHours(point);
+      point.total_hours = calcularHoras(point);
       
       await storage.savePoints(allPoints);
 
