@@ -309,6 +309,7 @@ interface PointRecord {
   total_hours: string;
   editado_manual?: number;
   encerrado?: number;
+  last_timestamp?: number;
   manual_status?: 'TRABALHANDO' | 'PAUSADO' | 'ENCERRADO';
 }
 
@@ -342,17 +343,18 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
 const calculateWorkStatus = (p: PointRecord | null): string => {
   if (p?.manual_status) return p.manual_status;
   if (!p || !p.e1) return "NÃO INICIADO";
+  if (p.encerrado) return "ENCERRADO";
   if (p.s2) return "ENCERRADO";
   if (p.e2) return "TRABALHANDO";
-  if (p.s1) return "EM INTERVALO";
+  if (p.s1) return "EM PAUSA";
   if (p.e1) return "TRABALHANDO";
   return "NÃO INICIADO";
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === 'ENCERRADO') return { label: 'JORNADA CONCLUÍDA', since: p?.s2 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === 'EM INTERVALO') return { label: 'EM INTERVALO', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === 'ENCERRADO') return { label: 'ENCERRADO', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === 'EM PAUSA') return { label: 'EM PAUSA', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
   if (status === 'TRABALHANDO') return { label: 'TRABALHANDO', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
   return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
@@ -2978,6 +2980,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [obs, setObs] = useState('');
   const [status, setStatus] = useState<'idle' | 'locating' | 'refining' | 'saving'>('idle');
   const [accuracy, setAccuracy] = useState<number | null>(null);
+  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastRegisteredTime, setLastRegisteredTime] = useState('');
   const [tempPos, setTempPos] = useState<any>(null);
@@ -3006,6 +3009,26 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     }
     if ((type === 'e1' || type === 'e2') && !selectedWorkId) {
       alert('Selecione a obra antes de registrar o ponto.');
+      return;
+    }
+
+    // Proteção contra registros duplicados (30 segundos)
+    if (point?.last_timestamp && (Date.now() - point.last_timestamp < 30000)) {
+      alert('Aguarde pelo menos 30 segundos entre os registros para evitar duplicidade.');
+      return;
+    }
+
+    // Validação de sequência lógica
+    if (type === 's1' && !point?.e1) {
+      alert('Você precisa registrar a entrada antes da saída.');
+      return;
+    }
+    if (type === 'e2' && !point?.s1) {
+      alert('Você precisa registrar a primeira saída antes da segunda entrada.');
+      return;
+    }
+    if (type === 's2' && !point?.e2) {
+      alert('Você precisa registrar a segunda entrada antes da segunda saída.');
       return;
     }
 
@@ -3106,6 +3129,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         point.encerrado = 1;
       }
 
+      point.last_timestamp = Date.now();
+
       if (obs) point.obs = obs;
 
       // GPS Status
@@ -3145,6 +3170,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       loadTodayPoint();
       onRefresh();
       setObs('');
+
+      if (type === 's1') {
+        setIsPauseModalOpen(true);
+      }
     } catch (err) {
       console.error("Erro fatal ao registrar ponto:", err);
       alert('Erro ao registrar ponto.');
@@ -3152,6 +3181,23 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       setLoading(false);
       setStatus('idle');
     }
+  };
+
+  const handleFinishDay = async () => {
+    setIsPauseModalOpen(false);
+    setLoading(true);
+    
+    const allPoints = await storage.getPoints(user.id);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
+    
+    if (index !== -1) {
+      allPoints[index].encerrado = 1;
+      await storage.savePoints(allPoints);
+      loadTodayPoint();
+      onRefresh();
+    }
+    setLoading(false);
   };
 
   const nextAction = point?.encerrado ? null : !point?.e1 ? 'e1' : !point?.s1 ? 's1' : !point?.e2 ? 'e2' : !point?.s2 ? 's2' : null;
@@ -3285,6 +3331,20 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           </div>
         </Card>
       )}
+
+      <Modal isOpen={isPauseModalOpen} onClose={() => setIsPauseModalOpen(false)} title="Encerrar jornada?">
+        <div className="space-y-6">
+          <p className="text-slate-300">Deseja encerrar a jornada ou iniciar um novo turno?</p>
+          <div className="grid grid-cols-1 gap-3">
+            <Button onClick={() => setIsPauseModalOpen(false)} variant="primary" className="w-full py-4">
+              Iniciar novo turno
+            </Button>
+            <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
+              Encerrar jornada
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
