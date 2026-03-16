@@ -4,6 +4,9 @@
   "description": "Sistema de controle de ponto da A&R Engenharia",
   "display": "standalone",
   "start_url": "/",
+  "scope": "/",
+  "lang": "pt-BR",
+  "dir": "ltr",
   "background_color": "#020617",
   "theme_color": "#f97316",
   "icons": [
