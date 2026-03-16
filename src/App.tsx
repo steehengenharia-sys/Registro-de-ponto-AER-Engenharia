@@ -170,32 +170,41 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c; // in metres
 }
 
-function calcularHoras(p: Partial<PointRecord>) {
-  const parseTimeToMinutes = (t: string | undefined) => {
-    if (!t || !t.includes(':')) return null;
-    const [h, m] = t.split(":").map(Number);
-    if (isNaN(h) || isNaN(m)) return null;
-    return h * 60 + m;
-  };
+function calcularPeriodo(inicio: string, fim: string): number {
+  if (!inicio || !fim || !inicio.includes(':') || !fim.includes(':')) return 0;
+  const [h1, m1] = inicio.split(':').map(Number);
+  const [h2, m2] = fim.split(':').map(Number);
+  if (isNaN(h1) || isNaN(m1) || isNaN(h2) || isNaN(m2)) return 0;
+  let diff = (h2 * 60 + m2) - (h1 * 60 + m1);
+  if (diff < 0) diff += 24 * 60;
+  return diff;
+}
 
-  const e1 = parseTimeToMinutes(p.e1);
-  const s1 = parseTimeToMinutes(p.s1);
-  const e2 = parseTimeToMinutes(p.e2);
-  const s2 = parseTimeToMinutes(p.s2);
+function formatarMinutos(totalMinutos: number): string {
+  const h = Math.floor(totalMinutos / 60);
+  const m = totalMinutos % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 
-  const calcDiffMinutes = (start: number | null, end: number | null) => {
-    if (start === null || end === null) return 0;
-    let diff = end - start;
-    // If exit is before entry, assume it passed midnight
-    if (diff < 0) diff += 24 * 60;
-    return diff;
-  };
+function calcularHoras(e1: string, s1: string, e2: string, s2: string): string {
+  const p1 = calcularPeriodo(e1, s1);
+  const p2 = calcularPeriodo(e2, s2);
+  return formatarMinutos(p1 + p2);
+}
 
-  const totalMinutes = calcDiffMinutes(e1, s1) + calcDiffMinutes(e2, s2);
-  const decimalHours = totalMinutes / 60;
-  
-  // Return with 2 decimal places as requested
-  return Number(decimalHours.toFixed(2));
+function somarHoras(listaDeHoras: string[]): string {
+  let totalMinutos = 0;
+  listaDeHoras.forEach(h => {
+    if (!h || !h.includes(':')) return;
+    const [hrs, mins] = h.split(':').map(Number);
+    if (isNaN(hrs) || isNaN(mins)) return;
+    totalMinutos += (hrs * 60 + mins);
+  });
+  return formatarMinutos(totalMinutos);
+}
+
+function calcularHorasRecord(p: Partial<PointRecord>): string {
+  return calcularHoras(p.e1 || '', p.s1 || '', p.e2 || '', p.s2 || '');
 }
 
 enum OperationType {
@@ -297,7 +306,7 @@ interface PointRecord {
   e2_gps_suspeito?: number;
   s2_gps_suspeito?: number;
   obs: string;
-  total_hours: number;
+  total_hours: string;
   editado_manual?: number;
   encerrado?: number;
   manual_status?: 'TRABALHANDO' | 'PAUSADO' | 'ENCERRADO';
@@ -305,7 +314,10 @@ interface PointRecord {
 
 // --- Helpers ---
 
-const calculateDiariasForUser = (totalHours: number) => {
+const calculateDiariasForUser = (totalHoursStr: string) => {
+  if (!totalHoursStr || !totalHoursStr.includes(':')) return 0;
+  const [h, m] = totalHoursStr.split(':').map(Number);
+  const totalHours = h + m / 60;
   const diariasInteiras = Math.floor(totalHours / 10);
   const horasRestantes = totalHours % 10;
   
@@ -319,8 +331,8 @@ const calculateDiariasForUser = (totalHours: number) => {
   return diariasInteiras + ajuste;
 };
 
-const calculateCostForUser = (totalHours: number, valorDiaria: number) => {
-  return calculateDiariasForUser(totalHours) * valorDiaria;
+const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
+  return calculateDiariasForUser(totalHoursStr) * valorDiaria;
 };
 /**
  * NOTE: The "WebSocket closed without opened" error seen in the console is a known 
@@ -554,9 +566,9 @@ export default function App() {
         // Recalculate total_hours for all points to ensure consistency
         const updatedPoints: PointRecord[] = [];
         const recalculated = pData.map(p => {
-          const newTotal = calcularHoras(p);
-          // Use a very small epsilon to detect any change
-          if (Math.abs(newTotal - (p.total_hours || 0)) > 0.001) {
+          const newTotal = calcularHorasRecord(p);
+          // Use string comparison for changes
+          if (newTotal !== p.total_hours) {
             const updatedPoint = { ...p, total_hours: newTotal };
             updatedPoints.push(updatedPoint);
             return updatedPoint;
@@ -835,7 +847,7 @@ function LoginPage() {
 function DashboardView({ points, users, works, onRefresh }: { points: PointRecord[], users: UserData[], works: Work[], onRefresh: () => void }) {
   const [recentPoints, setRecentPoints] = useState<PointRecord[]>([]);
   const [dashboardData, setDashboardData] = useState({
-    totalHours: 0,
+    totalHours: '00:00',
     employeesPresent: 0,
     dailyCost: 0,
     activeWorks: [] as any[],
@@ -854,53 +866,54 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       setRecentPoints(todayPoints);
 
       // Calculations
-      let totalHours = 0;
+      let totalMinutes = 0;
       const presentUsers = new Set<string>();
       let totalCost = 0;
       const workMap = new Map();
-      const userHoursMap = new Map();
+      const userMinutesMap = new Map();
 
       todayPoints.forEach((p: any) => {
-        const hours = p.total_hours || 0;
-        totalHours += hours;
+        const minutes = calcularPeriodo(p.e1, p.s1) + calcularPeriodo(p.e2, p.s2);
+        totalMinutes += minutes;
         presentUsers.add(String(p.user_id));
         
-        // Group hours by user
+        // Group minutes by user
         const userIdStr = String(p.user_id);
-        if (!userHoursMap.has(userIdStr)) {
-            userHoursMap.set(userIdStr, 0);
+        if (!userMinutesMap.has(userIdStr)) {
+            userMinutesMap.set(userIdStr, 0);
         }
-        userHoursMap.set(userIdStr, userHoursMap.get(userIdStr) + hours);
+        userMinutesMap.set(userIdStr, userMinutesMap.get(userIdStr) + minutes);
 
         // Prioritize e2_obra or e1_obra over work_name
         const workName = p.e2_obra || p.e1_obra || p.work_name || 'Não informada';
         if (!workMap.has(workName)) {
-          workMap.set(workName, { name: workName, employees: new Set(), hours: 0, cost: 0, userHours: new Map() });
+          workMap.set(workName, { name: workName, employees: new Set(), minutes: 0, cost: 0, userMinutes: new Map() });
         }
         const work = workMap.get(workName);
         work.employees.add(userIdStr);
-        work.hours += hours;
+        work.minutes += minutes;
         
-        // Track hours per user in this work for cost distribution
-        if (!work.userHours.has(userIdStr)) {
-            work.userHours.set(userIdStr, 0);
+        // Track minutes per user in this work for cost distribution
+        if (!work.userMinutes.has(userIdStr)) {
+            work.userMinutes.set(userIdStr, 0);
         }
-        work.userHours.set(userIdStr, work.userHours.get(userIdStr) + hours);
+        work.userMinutes.set(userIdStr, work.userMinutes.get(userIdStr) + minutes);
       });
 
       // Calculate cost per user and distribute to works
-      userHoursMap.forEach((totalHoursToday, userId) => {
+      userMinutesMap.forEach((totalMinutesToday, userId) => {
         try {
           const user = validUsers.find((u: any) => String(u.id) === String(userId));
           if (user && user.valor_diaria) {
-            const userTotalCostToday = calculateCostForUser(totalHoursToday, user.valor_diaria);
+            const totalHoursTodayStr = formatarMinutos(totalMinutesToday);
+            const userTotalCostToday = calculateCostForUser(totalHoursTodayStr, user.valor_diaria);
             totalCost += userTotalCostToday;
             
             // Distribute to works
             workMap.forEach((work) => {
-                if (work.userHours.has(userId)) {
-                    const userHoursInWork = work.userHours.get(userId);
-                    const proportion = totalHoursToday > 0 ? userHoursInWork / totalHoursToday : 0;
+                if (work.userMinutes.has(userId)) {
+                    const userMinutesInWork = work.userMinutes.get(userId);
+                    const proportion = totalMinutesToday > 0 ? userMinutesInWork / totalMinutesToday : 0;
                     work.cost += userTotalCostToday * proportion;
                 }
             });
@@ -911,8 +924,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       });
 
       const activeWorks = Array.from(workMap.values())
-        .map(w => ({ name: w.name, employees: w.employees.size, hours: w.hours, cost: w.cost }))
-        .sort((a, b) => b.hours - a.hours);
+        .map(w => ({ name: w.name, employees: w.employees.size, hours: formatarMinutos(w.minutes), cost: w.cost }))
+        .sort((a, b) => b.cost - a.cost);
 
       // New logic for Presence and Alerts - Consider valid users only
       const totalRegistered = validUsers.length;
@@ -959,8 +972,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
 
       // 4. Incomplete hours (< 10h)
       let incompleteCount = 0;
-      userHoursMap.forEach((hours) => {
-        if (hours < 10) {
+      userMinutesMap.forEach((minutes) => {
+        if (minutes < 10 * 60) {
           incompleteCount++;
         }
       });
@@ -969,7 +982,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       }
 
       setDashboardData({
-        totalHours,
+        totalHours: formatarMinutos(totalMinutes),
         employeesPresent,
         dailyCost: totalCost,
         activeWorks,
@@ -1000,7 +1013,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       {/* 2. VISÃO GERAL (INDICADORES) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
         <Card className="p-3 md:p-8 flex flex-col items-center justify-center h-24 md:h-40 shadow-lg border-slate-700/50">
-          <p className="text-xl md:text-4xl font-black text-white tracking-tight">{dashboardData.totalHours.toFixed(2)}h</p>
+          <p className="text-xl md:text-4xl font-black text-white tracking-tight">{dashboardData.totalHours}</p>
           <p className="text-[8px] md:text-[11px] font-bold text-slate-500 uppercase tracking-widest mt-1 md:mt-2 text-center">Total de Horas Hoje</p>
         </Card>
         
@@ -1039,7 +1052,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                 
                 <div className="pt-3 md:pt-4 border-t border-slate-800/50 flex justify-between items-end">
                   <div>
-                    <p className="text-sm md:text-base font-black text-white">{work.hours.toFixed(2)}h</p>
+                    <p className="text-sm md:text-base font-black text-white">{work.hours}</p>
                     <p className="text-[8px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest">hoje</p>
                   </div>
                   <div className="text-right">
@@ -1103,7 +1116,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                       <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.s2 || p.s1 || '--:--'}</td>
                       <td className="px-6 py-4 text-right">
                         <span className="text-sm font-black text-white">
-                          {p.total_hours?.toFixed(2)} h
+                          {p.total_hours} h
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -1173,7 +1186,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Horas</p>
-                      <p className="text-sm font-black text-orange-500">{p.total_hours?.toFixed(2)}h</p>
+                      <p className="text-sm font-black text-orange-500">{p.total_hours}h</p>
                     </div>
                   </div>
                 </div>
@@ -1644,7 +1657,7 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
               <div className="text-right flex items-center gap-3">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total:</span>
                 <span className="px-3 py-1 bg-slate-900 rounded-lg text-sm font-black text-white border border-slate-700">
-                  {p.total_hours?.toFixed(2)}h
+                  {p.total_hours}
                 </span>
               </div>
             </div>
@@ -1716,14 +1729,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         e2_obra: manualFormData.e2_obra,
         obs: manualFormData.obs,
         editado_manual: 1,
-        total_hours: 0,
+        total_hours: '00:00',
         e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
         s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
         e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
         s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
       };
 
-      newPoint.total_hours = calcularHoras(newPoint);
+      newPoint.total_hours = calcularHorasRecord(newPoint);
       allPoints.push(newPoint);
       await storage.savePoints(allPoints);
 
@@ -1844,7 +1857,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
       if (index !== -1) {
         const updated = { ...editFormData, editado_manual: 1 };
-        updated.total_hours = calcularHoras(updated);
+        updated.total_hours = calcularHorasRecord(updated);
         allPoints[index] = updated;
         await storage.savePoints(allPoints);
         setIsEditModalOpen(false);
@@ -1856,26 +1869,28 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const calculateTotals = (pointsToCalculate: PointRecord[]) => {
-    const totalHours = pointsToCalculate.reduce((acc, p) => acc + (p.total_hours || 0), 0);
+    const totalHours = somarHoras(pointsToCalculate.map(p => p.total_hours));
     
-    // Group hours by user
-    const userHours = pointsToCalculate.reduce((acc: any, p: PointRecord) => {
+    // Group minutes by user
+    const userMinutes = pointsToCalculate.reduce((acc: any, p: PointRecord) => {
         const uid = String(p.user_id);
-        acc[uid] = (acc[uid] || 0) + (p.total_hours || 0);
+        const minutes = calcularPeriodo(p.e1, p.s1) + calcularPeriodo(p.e2, p.s2);
+        acc[uid] = (acc[uid] || 0) + minutes;
         return acc;
     }, {});
 
     let totalDiarias = 0;
     let valorTotal = 0;
 
-    Object.keys(userHours).forEach(userId => {
+    Object.keys(userMinutes).forEach(userId => {
         try {
-          const hours = userHours[userId];
+          const minutes = userMinutes[userId];
+          const hoursStr = formatarMinutos(minutes);
           const user = users.find(u => String(u.id) === String(userId));
           const valorDiaria = user?.valor_diaria || 0;
           
-          totalDiarias += calculateDiariasForUser(hours);
-          valorTotal += calculateCostForUser(hours, valorDiaria);
+          totalDiarias += calculateDiariasForUser(hoursStr);
+          valorTotal += calculateCostForUser(hoursStr, valorDiaria);
         } catch (e) {
           console.error("Erro ao calcular totais no relatório:", e);
         }
@@ -1906,7 +1921,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       p.s1 || '--:--',
       p.e2 || '--:--',
       p.s2 || '--:--',
-      `${p.total_hours?.toFixed(2) || '0.00'}h`
+      `${p.total_hours || '00:00'}`
     ]);
 
     autoTable(doc, {
@@ -1920,7 +1935,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const finalY = (doc as any).lastAutoTable.finalY || 30;
     
     doc.setFontSize(12);
-    doc.text(`Total de horas trabalhadas: ${totalHours.toFixed(2)}h`, 14, finalY + 10);
+    doc.text(`Total de horas trabalhadas: ${totalHours}`, 14, finalY + 10);
     doc.text(`Total de diárias: ${totalDiarias}`, 14, finalY + 18);
     doc.text(`Valor da diária: R$ ${valorDiariaNum.toFixed(2)}`, 14, finalY + 26);
     doc.text(`Valor total: R$ ${valorTotal.toFixed(2)}`, 14, finalY + 34);
@@ -1941,7 +1956,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       'Saída 2': p.s2 || '--:--',
       'Turnos': p.e2 ? 2 : 1,
       'Obras': (p.e2 && p.e2_obra && p.e2_obra !== p.e1_obra) ? `T1: ${p.e1_obra || '---'} / T2: ${p.e2_obra}` : (p.e1_obra || p.e2_obra || p.work_name || '---'),
-      'Horas Trabalhadas': p.total_hours || 0
+      'Horas Trabalhadas': p.total_hours || '00:00'
     }));
 
     // Add empty row
@@ -2145,7 +2160,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.s2 || '--:--'}</td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
-                      {p.total_hours?.toFixed(2)}h
+                      {p.total_hours}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
@@ -2232,7 +2247,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total:</span>
                   <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
-                    {p.total_hours?.toFixed(2)}h
+                    {p.total_hours}
                   </span>
                 </div>
                 
@@ -2360,7 +2375,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex justify-between items-center">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Calculado:</span>
               <span className="text-lg font-black text-orange-500">
-                {calcularHoras(editFormData).toFixed(2)}h
+                {calcularHorasRecord(editFormData)}
               </span>
             </div>
 
@@ -2525,7 +2540,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
   
   const [reportData, setReportData] = useState<any[]>([]);
   const [summary, setSummary] = useState({
-    totalHours: 0,
+    totalHours: '00:00',
     totalEmployees: 0,
     totalDiarias: 0,
     totalCost: 0
@@ -2548,7 +2563,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const processed = filtered.map(p => {
       const user = users.find(u => String(u.id) === String(p.user_id));
       const valorDiaria = user?.valor_diaria || 0;
-      const hours = p.total_hours || 0;
+      const hours = p.total_hours || '00:00';
       const diarias = calculateDiariasForUser(hours);
       const cost = diarias * valorDiaria;
       
@@ -2564,7 +2579,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
     setReportData(processed);
 
-    const totalHours = processed.reduce((acc, curr) => acc + curr.calculatedHours, 0);
+    const totalHours = somarHoras(processed.map(p => p.calculatedHours));
     const totalDiarias = processed.reduce((acc, curr) => acc + curr.diarias, 0);
     const totalCost = processed.reduce((acc, curr) => acc + curr.cost, 0);
     const uniqueEmployees = new Set(processed.map(p => String(p.user_id))).size;
@@ -2582,20 +2597,21 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         workMap.set(p.workName, {
           name: p.workName,
           employees: new Set(),
-          hours: 0,
+          hoursList: [] as string[],
           diarias: 0,
           cost: 0
         });
       }
       const w = workMap.get(p.workName);
       w.employees.add(p.user_id);
-      w.hours += p.calculatedHours;
+      w.hoursList.push(p.calculatedHours);
       w.diarias += p.diarias;
       w.cost += p.cost;
     });
 
     setWorkSummary(Array.from(workMap.values()).map(w => ({
       ...w,
+      hours: somarHoras(w.hoursList),
       employeeCount: w.employees.size
     })));
   };
@@ -2625,7 +2641,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
         p.e1 || '--:--',
         p.s2 || p.s1 || '--:--',
-        `${p.calculatedHours.toFixed(2)}h`,
+        p.calculatedHours,
         p.diarias.toString(),
         `R$ ${p.cost.toFixed(2)}`
       ]),
@@ -2644,7 +2660,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       body: workSummary.map(w => [
         w.name,
         w.employeeCount.toString(),
-        `${w.hours.toFixed(2)}h`,
+        w.hours,
         w.diarias.toString(),
         `R$ ${w.cost.toFixed(2)}`
       ]),
@@ -2656,7 +2672,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const finalY2 = (doc as any).lastAutoTable.finalY + 10;
     doc.setFontSize(11);
     doc.text(`TOTAIS GERAIS:`, 14, finalY2);
-    doc.text(`Horas: ${summary.totalHours.toFixed(2)}h | Diárias: ${summary.totalDiarias} | Custo: R$ ${summary.totalCost.toFixed(2)}`, 14, finalY2 + 6);
+    doc.text(`Horas: ${summary.totalHours} | Diárias: ${summary.totalDiarias} | Custo: R$ ${summary.totalCost.toFixed(2)}`, 14, finalY2 + 6);
 
     doc.save(`Relatorio_Completo_${new Date().toLocaleDateString()}.pdf`);
   };
@@ -2668,7 +2684,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
       'Entrada': p.e1 || '--:--',
       'Saída': p.s2 || p.s1 || '--:--',
-      'Horas': p.calculatedHours.toFixed(2),
+      'Horas': p.calculatedHours,
       'Diária': p.diarias,
       'Valor (R$)': p.cost.toFixed(2)
     }));
@@ -2676,13 +2692,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const summaryData = workSummary.map(w => ({
       'Obra': w.name,
       'Funcionários': w.employeeCount,
-      'Total Horas': w.hours.toFixed(2),
+      'Total Horas': w.hours,
       'Total Diárias': w.diarias,
       'Custo Total (R$)': w.cost.toFixed(2)
     }));
 
     const totalsData = [{
-      'Total Horas': summary.totalHours.toFixed(2),
+      'Total Horas': summary.totalHours,
       'Total Funcionários': summary.totalEmployees,
       'Total Diárias': summary.totalDiarias,
       'Custo Total (R$)': summary.totalCost.toFixed(2)
@@ -2769,7 +2785,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
         <Card className="p-4 md:p-6 border-l-4 border-l-orange-600">
           <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Total de Horas</p>
-          <p className="text-xl md:text-2xl font-black text-white">{summary.totalHours.toFixed(2)}h</p>
+          <p className="text-xl md:text-2xl font-black text-white">{summary.totalHours}</p>
         </Card>
         <Card className="p-4 md:p-6 border-l-4 border-l-blue-600">
           <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Funcionários</p>
@@ -2814,7 +2830,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm text-slate-400">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.e1 || '--:--'}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.s2 || p.s1 || '--:--'}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculatedHours.toFixed(2)}h</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculatedHours}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.diarias}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</td>
                 </tr>
@@ -2862,7 +2878,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Horas</p>
-                  <p className="text-sm font-bold text-orange-500">{p.calculatedHours.toFixed(2)}h</p>
+                  <p className="text-sm font-bold text-orange-500">{p.calculatedHours}</p>
                 </div>
               </div>
             </div>
@@ -2897,7 +2913,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-6 py-4 text-sm font-bold text-white">{w.name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.employeeCount}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.hours.toFixed(2)}h</td>
+                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.hours}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.diarias}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">R$ {w.cost.toFixed(2)}</td>
                 </tr>
@@ -2933,7 +2949,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 </div>
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Horas</p>
-                  <p className="text-sm font-bold text-orange-500">{w.hours.toFixed(2)}h</p>
+                  <p className="text-sm font-bold text-orange-500">{w.hours}</p>
                 </div>
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Diárias</p>
@@ -3059,7 +3075,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
           s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
           obs: '',
-          total_hours: 0
+          total_hours: '00:00'
         };
         allPoints.push(point);
       }
@@ -3120,7 +3136,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       // Replicating the 3km/2min logic would require storing timestamps for each point.
       // For now, let's keep it simple or add timestamps to PointRecord.
       
-      point.total_hours = calcularHoras(point);
+      point.total_hours = calcularHorasRecord(point);
       
       await storage.savePoints(allPoints);
 
@@ -3282,7 +3298,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         <Card className="p-6">
           <div className="flex justify-between items-center mb-4">
             <h4 className="font-bold text-slate-400 uppercase tracking-widest text-xs">Resumo do Dia</h4>
-            <span className="text-orange-500 font-black">{point.total_hours?.toFixed(2)}h trabalhadas</span>
+            <span className="text-orange-500 font-black">{point.total_hours}h trabalhadas</span>
           </div>
           <div className="flex items-start gap-3 text-xs text-slate-500">
             <Info size={14} className="mt-0.5 shrink-0" />
