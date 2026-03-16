@@ -342,15 +342,17 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
 const calculateWorkStatus = (p: PointRecord | null): string => {
   if (p?.manual_status) return p.manual_status;
   if (!p || !p.e1) return "NÃO INICIADO";
-  if (p.s1) return "ENCERRADO";
+  if (p.s2) return "ENCERRADO";
+  if (p.e2) return "TRABALHANDO";
+  if (p.s1) return "EM INTERVALO";
   if (p.e1) return "TRABALHANDO";
   return "NÃO INICIADO";
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === 'ENCERRADO') return { label: 'ENCERRADO', since: p?.s2 || p?.s1 || p?.e1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === 'PAUSADO') return { label: 'PAUSADO', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === 'ENCERRADO') return { label: 'JORNADA CONCLUÍDA', since: p?.s2 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === 'EM INTERVALO') return { label: 'EM INTERVALO', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
   if (status === 'TRABALHANDO') return { label: 'TRABALHANDO', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
   return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
@@ -2976,7 +2978,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [obs, setObs] = useState('');
   const [status, setStatus] = useState<'idle' | 'locating' | 'refining' | 'saving'>('idle');
   const [accuracy, setAccuracy] = useState<number | null>(null);
-  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastRegisteredTime, setLastRegisteredTime] = useState('');
   const [tempPos, setTempPos] = useState<any>(null);
@@ -3095,7 +3096,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       } else if (type === 's1') {
         point.s1 = horaLocal;
         point.s1_lat = lat; point.s1_lng = lng; point.s1_acc = acc; point.s1_address = address;
-        point.encerrado = 1;
       } else if (type === 'e2') {
         point.e2 = horaLocal;
         point.e2_lat = lat; point.e2_lng = lng; point.e2_acc = acc; point.e2_address = address;
@@ -3145,10 +3145,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       loadTodayPoint();
       onRefresh();
       setObs('');
-      
-      if (type === 's1') {
-        setIsPauseModalOpen(true);
-      }
     } catch (err) {
       console.error("Erro fatal ao registrar ponto:", err);
       alert('Erro ao registrar ponto.');
@@ -3156,23 +3152,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       setLoading(false);
       setStatus('idle');
     }
-  };
-
-  const handleFinishDay = async () => {
-    setIsPauseModalOpen(false);
-    setLoading(true);
-    
-    const allPoints = await storage.getPoints(user.id);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
-    
-    if (index !== -1) {
-      allPoints[index].encerrado = 1;
-      await storage.savePoints(allPoints);
-      loadTodayPoint();
-      onRefresh();
-    }
-    setLoading(false);
   };
 
   const nextAction = point?.encerrado ? null : !point?.e1 ? 'e1' : !point?.s1 ? 's1' : !point?.e2 ? 'e2' : !point?.s2 ? 's2' : null;
@@ -3306,20 +3285,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           </div>
         </Card>
       )}
-
-      <Modal isOpen={isPauseModalOpen} onClose={() => setIsPauseModalOpen(false)} title="Pausa de trabalho">
-        <div className="space-y-6">
-          <p className="text-slate-300">Você iniciou uma pausa. Deseja continuar a jornada depois da pausa ou encerrar a jornada por aqui?</p>
-          <div className="grid grid-cols-1 gap-3">
-            <Button onClick={() => setIsPauseModalOpen(false)} variant="primary" className="w-full py-4">
-              Continuar jornada
-            </Button>
-            <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
-              Encerrar jornada
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }
