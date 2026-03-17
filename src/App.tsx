@@ -186,9 +186,9 @@ function formatarMinutos(totalMinutos: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-function calcularHoras(e1: string, s1: string, e2: string, s2: string): string {
-  const p1 = calcularPeriodo(e1, s1);
-  const p2 = calcularPeriodo(e2, s2);
+function calcularHoras(entrada1: string, saida1: string, entrada2: string, saida2: string): string {
+  const p1 = calcularPeriodo(entrada1, saida1);
+  const p2 = calcularPeriodo(entrada2, saida2);
   return formatarMinutos(p1 + p2);
 }
 
@@ -204,7 +204,7 @@ function somarHoras(listaDeHoras: string[]): string {
 }
 
 function calcularHorasRecord(p: Partial<PointRecord>): string {
-  return calcularHoras(p.e1 || '', p.s1 || '', p.e2 || '', p.s2 || '');
+  return calcularHoras(p.entrada1 || '', p.saida1 || '', p.entrada2 || '', p.saida2 || '');
 }
 
 enum OperationType {
@@ -283,6 +283,7 @@ interface Work {
 }
 
 enum WorkStatus {
+  NAO_INICIADO = 'nao_iniciado',
   TRABALHANDO = 'trabalhando',
   PAUSADO = 'pausado',
   ENCERRADO = 'encerrado'
@@ -295,22 +296,22 @@ interface PointRecord {
   user_name?: string;
   work_id?: string;
   work_name?: string;
-  e1_obra?: string;
-  e2_obra?: string;
+  entrada1_obra?: string;
+  entrada2_obra?: string;
   date: string;
-  e1: string; s1: string; e2: string; s2: string;
-  e1_lat: number; e1_lng: number; e1_acc: number; e1_address: string;
-  s1_lat: number; s1_lng: number; s1_acc: number; s1_address: string;
-  e2_lat: number; e2_lng: number; e2_acc: number; e2_address: string;
-  s2_lat: number; s2_lng: number; s2_acc: number; s2_address: string;
-  e1_dist?: number; e1_gps_status?: string;
-  s1_dist?: number; s1_gps_status?: string;
-  e2_dist?: number; e2_gps_status?: string;
-  s2_dist?: number; s2_gps_status?: string;
-  e1_gps_suspeito?: number;
-  s1_gps_suspeito?: number;
-  e2_gps_suspeito?: number;
-  s2_gps_suspeito?: number;
+  entrada1: string; saida1: string; entrada2: string; saida2: string;
+  entrada1_lat: number; entrada1_lng: number; entrada1_acc: number; entrada1_address: string;
+  saida1_lat: number; saida1_lng: number; saida1_acc: number; saida1_address: string;
+  entrada2_lat: number; entrada2_lng: number; entrada2_acc: number; entrada2_address: string;
+  saida2_lat: number; saida2_lng: number; saida2_acc: number; saida2_address: string;
+  entrada1_dist?: number; entrada1_gps_status?: string;
+  saida1_dist?: number; saida1_gps_status?: string;
+  entrada2_dist?: number; entrada2_gps_status?: string;
+  saida2_dist?: number; saida2_gps_status?: string;
+  entrada1_gps_suspeito?: number;
+  saida1_gps_suspeito?: number;
+  entrada2_gps_suspeito?: number;
+  saida2_gps_suspeito?: number;
   obs: string;
   total_hours: string;
   editado_manual?: number;
@@ -358,21 +359,29 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
  */
 
 const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
-  if (!p) return WorkStatus.TRABALHANDO;
+  if (!p || !p.entrada1) return WorkStatus.NAO_INICIADO;
   
-  // Logic based on times as requested
-  if (p.s2) return WorkStatus.ENCERRADO;
-  if (p.s1 && !p.e2) return WorkStatus.PAUSADO;
-  if (p.e1 && !p.s1) return WorkStatus.TRABALHANDO;
+  if (p.encerrado) return WorkStatus.ENCERRADO;
+  if (p.saida2) return WorkStatus.ENCERRADO;
+  if (p.entrada2) return WorkStatus.TRABALHANDO;
+  if (p.saida1) {
+    if (p.status === WorkStatus.PAUSADO) return WorkStatus.PAUSADO;
+    return WorkStatus.ENCERRADO;
+  }
+  if (p.entrada1) return WorkStatus.TRABALHANDO;
   
-  return WorkStatus.TRABALHANDO; // Safe fallback
+  return WorkStatus.NAO_INICIADO;
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: p?.saida2 || p?.saida1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: p?.saida1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === WorkStatus.TRABALHANDO) {
+    const since = (p?.entrada2 && p?.saida1) ? p.entrada2 : (p?.entrada1 || '--:--');
+    return { label: 'Trabalhando', since, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  }
+  return { label: 'Não iniciado', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
 
 // --- Components ---
@@ -893,7 +902,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       const userMinutesMap = new Map();
 
       todayPoints.forEach((p: any) => {
-        const minutes = calcularPeriodo(p.e1, p.s1) + calcularPeriodo(p.e2, p.s2);
+        const minutes = calcularPeriodo(p.entrada1, p.saida1) + calcularPeriodo(p.entrada2, p.saida2);
         totalMinutes += minutes;
         presentUsers.add(String(p.user_id));
         
@@ -904,8 +913,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         }
         userMinutesMap.set(userIdStr, userMinutesMap.get(userIdStr) + minutes);
 
-        // Prioritize e2_obra or e1_obra over work_name
-        const workName = p.e2_obra || p.e1_obra || p.work_name || 'Não informada';
+        // Prioritize entrada2_obra or entrada1_obra over work_name
+        const workName = p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada';
         if (!workMap.has(workName)) {
           workMap.set(workName, { name: workName, employees: new Set(), minutes: 0, cost: 0, userMinutes: new Map() });
         }
@@ -960,10 +969,10 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         alerts.push(`⚠ ${employeesAbsent} funcionário${employeesAbsent > 1 ? 's' : ''} sem entrada registrada`);
       }
 
-      // 2. No exit (E1 without S1 OR E2 without S2)
+      // 2. No exit (entrada1 without saida1 OR entrada2 without saida2)
       todayPoints.forEach(p => {
-        const hasE1NoS1 = p.e1 && !p.s1;
-        const hasE2NoS2 = p.e2 && !p.s2;
+        const hasE1NoS1 = p.entrada1 && !p.saida1;
+        const hasE2NoS2 = p.entrada2 && !p.saida2;
         if (hasE1NoS1 || hasE2NoS2) {
           alerts.push(`⚠ ${p.user_name || 'Funcionário'} ainda não bateu ponto de saída`);
         }
@@ -973,19 +982,19 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       todayPoints.forEach(p => {
         const work = works.find(w => w.id === p.work_id);
         const radius = work?.radius || 200;
-        const hasGpsAlert = (p.e1_dist !== undefined && p.e1_dist !== null && p.e1_dist > radius) || 
-                            (p.s1_dist !== undefined && p.s1_dist !== null && p.s1_dist > radius) || 
-                            (p.e2_dist !== undefined && p.e2_dist !== null && p.e2_dist > radius) || 
-                            (p.s2_dist !== undefined && p.s2_dist !== null && p.s2_dist > radius);
+        const hasGpsAlert = (p.entrada1_dist !== undefined && p.entrada1_dist !== null && p.entrada1_dist > radius) || 
+                            (p.saida1_dist !== undefined && p.saida1_dist !== null && p.saida1_dist > radius) || 
+                            (p.entrada2_dist !== undefined && p.entrada2_dist !== null && p.entrada2_dist > radius) || 
+                            (p.saida2_dist !== undefined && p.saida2_dist !== null && p.saida2_dist > radius);
         if (hasGpsAlert) {
           alerts.push(`⚠ ${p.user_name || 'Funcionário'} bateu ponto fora da área da obra`);
         }
         
-        if (p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito) {
+        if (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) {
           alerts.push(`⚠ GPS SUSPEITO: ${p.user_name || 'Funcionário'} teve movimentação maior que 3km em menos de 2 minutos.`);
         }
         
-        if (p.e1_gps_status === 'fraco' || p.s1_gps_status === 'fraco' || p.e2_gps_status === 'fraco' || p.s2_gps_status === 'fraco') {
+        if (p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') {
           alerts.push(`⚠ Precisão GPS fraca: ${p.user_name || 'Funcionário'} registrou ponto com precisão maior que 300m.`);
         }
       });
@@ -1108,7 +1117,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
               <tbody className="divide-y divide-slate-800/50">
                 {recentPoints.length > 0 ? recentPoints.map((p, index) => {
                   const statusInfo = getPointStatus(p);
-                  const statusLabel = statusInfo.label === 'TRABALHANDO' ? 'Trabalhando' : statusInfo.label === 'PAUSADO' ? 'Pausado' : statusInfo.label === 'ENCERRADO' ? 'Encerrado' : 'Não iniciado';
+                  const statusLabel = statusInfo.label;
                   const statusColor = `${statusInfo.color} ${statusInfo.bg} ${statusInfo.border}`;
                   
                   return (
@@ -1128,12 +1137,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-2 text-slate-400">
                           <Building2 size={12} className="text-slate-600" />
                           <span className="text-xs font-medium">
-                            {p.e2_obra || p.e1_obra || p.work_name || '---'}
+                            {p.entrada2_obra || p.entrada1_obra || p.work_name || '---'}
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.e1 || '--:--'}</td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.s2 || p.s1 || '--:--'}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.entrada1 || '--:--'}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.saida2 || p.saida1 || '--:--'}</td>
                       <td className="px-6 py-4 text-right">
                         <span className="text-sm font-black text-white">
                           {p.total_hours} h
@@ -1165,7 +1174,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
           <div className="md:hidden flex flex-col divide-y divide-slate-800">
             {recentPoints.length > 0 ? recentPoints.map((p, index) => {
               const statusInfo = getPointStatus(p);
-              const statusLabel = statusInfo.label === 'TRABALHANDO' ? 'Trabalhando' : statusInfo.label === 'PAUSADO' ? 'Pausado' : statusInfo.label === 'ENCERRADO' ? 'Encerrado' : 'Não iniciado';
+              const statusLabel = statusInfo.label;
               const statusColor = `${statusInfo.color} ${statusInfo.bg} ${statusInfo.border}`;
 
               return (
@@ -1180,7 +1189,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-1.5 text-slate-400 mt-0.5">
                           <Building2 size={12} className="text-slate-500" />
                           <span className="text-xs font-medium truncate max-w-[150px]">
-                            {p.e2_obra || p.e1_obra || p.work_name || '---'}
+                            {p.entrada2_obra || p.entrada1_obra || p.work_name || '---'}
                           </span>
                         </div>
                       </div>
@@ -1196,12 +1205,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                     <div className="flex items-center gap-4">
                       <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Entrada</p>
-                        <p className="text-sm font-bold text-white">{p.e1 || '--:--'}</p>
+                        <p className="text-sm font-bold text-white">{p.entrada1 || '--:--'}</p>
                       </div>
                       <div className="w-4 border-t border-slate-600"></div>
                       <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Saída</p>
-                        <p className="text-sm font-bold text-white">{p.s2 || p.s1 || '--:--'}</p>
+                        <p className="text-sm font-bold text-white">{p.saida2 || p.saida1 || '--:--'}</p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -1683,10 +1692,10 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PointHistoryItem label="Entrada 1" time={p.e1} obra={p.e1_obra || p.work_name} />
-              <PointHistoryItem label="Saída 1" time={p.s1} />
-              <PointHistoryItem label="Entrada 2" time={p.e2} obra={p.e2_obra || p.e1_obra || p.work_name} />
-              <PointHistoryItem label="Saída 2" time={p.s2} />
+              <PointHistoryItem label="Entrada 1" time={p.entrada1} obra={p.entrada1_obra || p.work_name} />
+              <PointHistoryItem label="Saída 1" time={p.saida1} />
+              <PointHistoryItem label="Entrada 2" time={p.entrada2} obra={p.entrada2_obra || p.entrada1_obra || p.work_name} />
+              <PointHistoryItem label="Saída 2" time={p.saida2} />
             </div>
           </Card>
         ))}
@@ -1724,7 +1733,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [editFormData, setEditFormData] = useState<any>(null);
-  const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
+  const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const saveManualPoint = async (e: React.FormEvent) => {
@@ -1741,20 +1750,20 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         funcionario_id: String(manualFormData.user_id),
         user_name: userObj?.name || '---',
         date: manualFormData.date,
-        e1: manualFormData.e1,
-        s1: manualFormData.s1,
-        e2: manualFormData.e2,
-        s2: manualFormData.s2,
-        e1_obra: manualFormData.e1_obra,
-        e2_obra: manualFormData.e2_obra,
+        entrada1: manualFormData.entrada1,
+        saida1: manualFormData.saida1,
+        entrada2: manualFormData.entrada2,
+        saida2: manualFormData.saida2,
+        entrada1_obra: manualFormData.entrada1_obra,
+        entrada2_obra: manualFormData.entrada2_obra,
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
-        status: WorkStatus.TRABALHANDO,
-        e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
-        s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
-        e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
-        s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
+        status: manualFormData.manual_status || WorkStatus.NAO_INICIADO,
+        entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
+        saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
+        entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
+        saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
       };
 
       newPoint.total_hours = calcularHorasRecord(newPoint);
@@ -1762,7 +1771,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       await storage.savePoints(allPoints);
 
       setIsManualModalOpen(false);
-      setManualFormData({ user_id: '', date: '', e1: '', s1: '', e2: '', s2: '', e1_obra: '', e2_obra: '', obs: '' });
+      setManualFormData({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
       await onRefresh();
     } finally {
       setIsSubmitting(false);
@@ -1820,11 +1829,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (p.obs) warnings.push(`Observação: ${p.obs}`);
     if (p.editado_manual) warnings.push('Este registro foi editado manualmente por um administrador.');
     
-    if (p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito) {
+    if (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) {
       warnings.push('⚠ GPS SUSPEITO: Movimentação maior que 3km em menos de 2 minutos detectada.');
     }
     
-    if (p.e1_gps_status === 'fraco' || p.s1_gps_status === 'fraco' || p.e2_gps_status === 'fraco' || p.s2_gps_status === 'fraco') {
+    if (p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') {
       warnings.push('⚠ Precisão GPS fraca: A precisão do GPS foi maior que 300 metros em um dos registros.');
     }
 
@@ -1833,32 +1842,32 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const showLocation = (p: PointRecord) => {
-    const workE1 = works.find(w => w.name === p.e1_obra) || works.find(w => w.id === p.work_id);
-    const workE2 = works.find(w => w.name === p.e2_obra) || workE1;
+    const workE1 = works.find(w => w.name === p.entrada1_obra) || works.find(w => w.id === p.work_id);
+    const workE2 = works.find(w => w.name === p.entrada2_obra) || workE1;
     
     const radiusE1 = workE1?.radius || 200;
     const radiusE2 = workE2?.radius || 200;
 
     const locations = [];
-    if (p.e1_lat && p.e1_lng) {
-      const dist = p.e1_dist ?? null;
+    if (p.entrada1_lat && p.entrada1_lng) {
+      const dist = p.entrada1_dist ?? null;
       const status = dist !== null ? (dist <= radiusE1 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Entrada 1', lat: p.e1_lat, lng: p.e1_lng, acc: p.e1_acc || 0, dist, status, suspeito: p.e1_gps_suspeito, gps_status: p.e1_gps_status });
+      locations.push({ name: 'Entrada 1', lat: p.entrada1_lat, lng: p.entrada1_lng, acc: p.entrada1_acc || 0, dist, status, suspeito: p.entrada1_gps_suspeito, gps_status: p.entrada1_gps_status });
     }
-    if (p.s1_lat && p.s1_lng) {
-      const dist = p.s1_dist ?? null;
+    if (p.saida1_lat && p.saida1_lng) {
+      const dist = p.saida1_dist ?? null;
       const status = dist !== null ? (dist <= radiusE1 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Saída 1', lat: p.s1_lat, lng: p.s1_lng, acc: p.s1_acc || 0, dist, status, suspeito: p.s1_gps_suspeito, gps_status: p.s1_gps_status });
+      locations.push({ name: 'Saída 1', lat: p.saida1_lat, lng: p.saida1_lng, acc: p.saida1_acc || 0, dist, status, suspeito: p.saida1_gps_suspeito, gps_status: p.saida1_gps_status });
     }
-    if (p.e2_lat && p.e2_lng) {
-      const dist = p.e2_dist ?? null;
+    if (p.entrada2_lat && p.entrada2_lng) {
+      const dist = p.entrada2_dist ?? null;
       const status = dist !== null ? (dist <= radiusE2 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Entrada 2', lat: p.e2_lat, lng: p.e2_lng, acc: p.e2_acc || 0, dist, status, suspeito: p.e2_gps_suspeito, gps_status: p.e2_gps_status });
+      locations.push({ name: 'Entrada 2', lat: p.entrada2_lat, lng: p.entrada2_lng, acc: p.entrada2_acc || 0, dist, status, suspeito: p.entrada2_gps_suspeito, gps_status: p.entrada2_gps_status });
     }
-    if (p.s2_lat && p.s2_lng) {
-      const dist = p.s2_dist ?? null;
+    if (p.saida2_lat && p.saida2_lng) {
+      const dist = p.saida2_dist ?? null;
       const status = dist !== null ? (dist <= radiusE2 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Saída 2', lat: p.s2_lat, lng: p.s2_lng, acc: p.s2_acc || 0, dist, status, suspeito: p.s2_gps_suspeito, gps_status: p.s2_gps_status });
+      locations.push({ name: 'Saída 2', lat: p.saida2_lat, lng: p.saida2_lng, acc: p.saida2_acc || 0, dist, status, suspeito: p.saida2_gps_suspeito, gps_status: p.saida2_gps_status });
     }
 
     if (locations.length > 0) {
@@ -1895,7 +1904,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     // Group minutes by user
     const userMinutes = pointsToCalculate.reduce((acc: any, p: PointRecord) => {
         const uid = String(p.user_id);
-        const minutes = calcularPeriodo(p.e1, p.s1) + calcularPeriodo(p.e2, p.s2);
+        const minutes = calcularPeriodo(p.entrada1, p.saida1) + calcularPeriodo(p.entrada2, p.saida2);
         acc[uid] = (acc[uid] || 0) + minutes;
         return acc;
     }, {});
@@ -1938,10 +1947,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const tableData = filteredPoints.map(p => [
       p.user_name || '-',
       new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      p.e1 || '--:--',
-      p.s1 || '--:--',
-      p.e2 || '--:--',
-      p.s2 || '--:--',
+      p.entrada1 || '--:--',
+      p.saida1 || '--:--',
+      p.entrada2 || '--:--',
+      p.saida2 || '--:--',
       `${p.total_hours || '00:00'}`
     ]);
 
@@ -1971,12 +1980,12 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const data = filteredPoints.map(p => ({
       'Funcionário': p.user_name || '-',
       'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      'Entrada 1': p.e1 || '--:--',
-      'Saída 1': p.s1 || '--:--',
-      'Entrada 2': p.e2 || '--:--',
-      'Saída 2': p.s2 || '--:--',
-      'Turnos': p.e2 ? 2 : 1,
-      'Obras': (p.e2 && p.e2_obra && p.e2_obra !== p.e1_obra) ? `T1: ${p.e1_obra || '---'} / T2: ${p.e2_obra}` : (p.e1_obra || p.e2_obra || p.work_name || '---'),
+      'Entrada 1': p.entrada1 || '--:--',
+      'Saída 1': p.saida1 || '--:--',
+      'Entrada 2': p.entrada2 || '--:--',
+      'Saída 2': p.saida2 || '--:--',
+      'Turnos': p.entrada2 ? 2 : 1,
+      'Obras': (p.entrada2 && p.entrada2_obra && p.entrada2_obra !== p.entrada1_obra) ? `T1: ${p.entrada1_obra || '---'} / T2: ${p.entrada2_obra}` : (p.entrada1_obra || p.entrada2_obra || p.work_name || '---'),
       'Horas Trabalhadas': p.total_hours || '00:00'
     }));
 
@@ -2170,15 +2179,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-sm font-medium text-slate-300">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
-                    <p className="text-sm font-bold text-emerald-500">{p.e1 || '--:--'}</p>
-                    {p.e1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.e1_obra || p.work_name}</p>}
+                    <p className="text-sm font-bold text-emerald-500">{p.entrada1 || '--:--'}</p>
+                    {p.entrada1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.entrada1_obra || p.work_name}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.s1 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida1 || '--:--'}</td>
                   <td className="px-6 py-4">
-                    <p className="text-sm font-bold text-emerald-500">{p.e2 || '--:--'}</p>
-                    {p.e2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.e2_obra || p.work_name}</p>}
+                    <p className="text-sm font-bold text-emerald-500">{p.entrada2 || '--:--'}</p>
+                    {p.entrada2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.entrada2_obra || p.work_name}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.s2 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {p.total_hours}
@@ -2186,11 +2195,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end items-center gap-2 transition-opacity">
-                      {(p.obs || p.editado_manual || p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito || p.e1_gps_status === 'fraco' || p.s1_gps_status === 'fraco' || p.e2_gps_status === 'fraco' || p.s2_gps_status === 'fraco') ? (
+                      {(p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                         <button 
                           onClick={() => showWarning(p)} 
                           className={`p-2 rounded-lg transition-all ${
-                            (p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito) 
+                            (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) 
                               ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30' 
                               : 'bg-amber-500/20 text-amber-500 hover:bg-amber-500/30'
                           }`}
@@ -2246,21 +2255,21 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <div className="grid grid-cols-2 gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 1</p>
-                  <p className="text-sm font-bold text-emerald-500">{p.e1 || '--:--'}</p>
-                  {p.e1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.e1_obra || p.work_name}</p>}
+                  <p className="text-sm font-bold text-emerald-500">{p.entrada1 || '--:--'}</p>
+                  {p.entrada1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.entrada1_obra || p.work_name}</p>}
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 1</p>
-                  <p className="text-sm font-bold text-orange-500">{p.s1 || '--:--'}</p>
+                  <p className="text-sm font-bold text-orange-500">{p.saida1 || '--:--'}</p>
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 2</p>
-                  <p className="text-sm font-bold text-emerald-500">{p.e2 || '--:--'}</p>
-                  {p.e2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.e2_obra || p.work_name}</p>}
+                  <p className="text-sm font-bold text-emerald-500">{p.entrada2 || '--:--'}</p>
+                  {p.entrada2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.entrada2_obra || p.work_name}</p>}
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 2</p>
-                  <p className="text-sm font-bold text-orange-500">{p.s2 || '--:--'}</p>
+                  <p className="text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</p>
                 </div>
               </div>
 
@@ -2273,11 +2282,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 </div>
                 
                 <div className="flex justify-end items-center gap-1">
-                  {(p.obs || p.editado_manual || p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito || p.e1_gps_status === 'fraco' || p.s1_gps_status === 'fraco' || p.e2_gps_status === 'fraco' || p.s2_gps_status === 'fraco') ? (
+                  {(p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                     <button 
                       onClick={() => showWarning(p)} 
                       className={`p-2 rounded-lg transition-all ${
-                        (p.e1_gps_suspeito || p.s1_gps_suspeito || p.e2_gps_suspeito || p.s2_gps_suspeito) 
+                        (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) 
                           ? 'bg-red-500/20 text-red-500' 
                           : 'bg-amber-500/20 text-amber-500'
                       }`}
@@ -2387,10 +2396,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="grid grid-cols-2 gap-4">
               <Input label="Data" type="date" value={editFormData.date || ''} onChange={e => setEditFormData({ ...editFormData, date: e.target.value })} />
               <div />
-              <Input label="Entrada 1" value={editFormData.e1 || ''} onChange={e => setEditFormData({ ...editFormData, e1: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 1" value={editFormData.s1 || ''} onChange={e => setEditFormData({ ...editFormData, s1: e.target.value })} placeholder="00:00" />
-              <Input label="Entrada 2" value={editFormData.e2 || ''} onChange={e => setEditFormData({ ...editFormData, e2: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 2" value={editFormData.s2 || ''} onChange={e => setEditFormData({ ...editFormData, s2: e.target.value })} placeholder="00:00" />
+              <Input label="Entrada 1" value={editFormData.entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, entrada1: e.target.value })} placeholder="00:00" />
+              <Input label="Saída 1" value={editFormData.saida1 || ''} onChange={e => setEditFormData({ ...editFormData, saida1: e.target.value })} placeholder="00:00" />
+              <Input label="Entrada 2" value={editFormData.entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, entrada2: e.target.value })} placeholder="00:00" />
+              <Input label="Saída 2" value={editFormData.saida2 || ''} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
             </div>
             
             <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex justify-between items-center">
@@ -2401,8 +2410,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Obra Turno 1" value={editFormData.e1_obra || ''} onChange={e => setEditFormData({ ...editFormData, e1_obra: e.target.value })} />
-              <Input label="Obra Turno 2" value={editFormData.e2_obra || ''} onChange={e => setEditFormData({ ...editFormData, e2_obra: e.target.value })} />
+              <Input label="Obra Turno 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
+              <Input label="Obra Turno 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
@@ -2420,16 +2429,16 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700 space-y-4">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Coordenadas GPS (Opcional)</p>
               <div className="grid grid-cols-2 gap-4">
-                <Input label="Lat E1" value={editFormData.e1_lat || ''} onChange={e => setEditFormData({ ...editFormData, e1_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng E1" value={editFormData.e1_lng || ''} onChange={e => setEditFormData({ ...editFormData, e1_lng: e.target.value })} placeholder="Longitude" />
-                <Input label="Lat S1" value={editFormData.s1_lat || ''} onChange={e => setEditFormData({ ...editFormData, s1_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng S1" value={editFormData.s1_lng || ''} onChange={e => setEditFormData({ ...editFormData, s1_lng: e.target.value })} placeholder="Longitude" />
+                <Input label="Lat E1" value={editFormData.entrada1_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lat: e.target.value })} placeholder="Latitude" />
+                <Input label="Lng E1" value={editFormData.entrada1_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lng: e.target.value })} placeholder="Longitude" />
+                <Input label="Lat S1" value={editFormData.saida1_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lat: e.target.value })} placeholder="Latitude" />
+                <Input label="Lng S1" value={editFormData.saida1_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lng: e.target.value })} placeholder="Longitude" />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <Input label="Lat E2" value={editFormData.e2_lat || ''} onChange={e => setEditFormData({ ...editFormData, e2_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng E2" value={editFormData.e2_lng || ''} onChange={e => setEditFormData({ ...editFormData, e2_lng: e.target.value })} placeholder="Longitude" />
-                <Input label="Lat S2" value={editFormData.s2_lat || ''} onChange={e => setEditFormData({ ...editFormData, s2_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng S2" value={editFormData.s2_lng || ''} onChange={e => setEditFormData({ ...editFormData, s2_lng: e.target.value })} placeholder="Longitude" />
+                <Input label="Lat E2" value={editFormData.entrada2_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lat: e.target.value })} placeholder="Latitude" />
+                <Input label="Lng E2" value={editFormData.entrada2_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lng: e.target.value })} placeholder="Longitude" />
+                <Input label="Lat S2" value={editFormData.saida2_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lat: e.target.value })} placeholder="Latitude" />
+                <Input label="Lng S2" value={editFormData.saida2_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lng: e.target.value })} placeholder="Longitude" />
               </div>
             </div>
 
@@ -2466,14 +2475,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           </div>
           <Input label="Data" type="date" value={manualFormData.date} onChange={e => setManualFormData({ ...manualFormData, date: e.target.value })} required />
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Entrada 1" value={manualFormData.e1} onChange={e => setManualFormData({ ...manualFormData, e1: e.target.value })} placeholder="00:00" />
-            <Input label="Saída 1" value={manualFormData.s1} onChange={e => setManualFormData({ ...manualFormData, s1: e.target.value })} placeholder="00:00" />
-            <Input label="Entrada 2" value={manualFormData.e2} onChange={e => setManualFormData({ ...manualFormData, e2: e.target.value })} placeholder="00:00" />
-            <Input label="Saída 2" value={manualFormData.s2} onChange={e => setManualFormData({ ...manualFormData, s2: e.target.value })} placeholder="00:00" />
+            <Input label="Entrada 1" value={manualFormData.entrada1} onChange={e => setManualFormData({ ...manualFormData, entrada1: e.target.value })} placeholder="00:00" />
+            <Input label="Saída 1" value={manualFormData.saida1} onChange={e => setManualFormData({ ...manualFormData, saida1: e.target.value })} placeholder="00:00" />
+            <Input label="Entrada 2" value={manualFormData.entrada2} onChange={e => setManualFormData({ ...manualFormData, entrada2: e.target.value })} placeholder="00:00" />
+            <Input label="Saída 2" value={manualFormData.saida2} onChange={e => setManualFormData({ ...manualFormData, saida2: e.target.value })} placeholder="00:00" />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Obra Turno 1" value={manualFormData.e1_obra} onChange={e => setManualFormData({ ...manualFormData, e1_obra: e.target.value })} />
-            <Input label="Obra Turno 2" value={manualFormData.e2_obra} onChange={e => setManualFormData({ ...manualFormData, e2_obra: e.target.value })} />
+            <Input label="Obra Turno 1" value={manualFormData.entrada1_obra} onChange={e => setManualFormData({ ...manualFormData, entrada1_obra: e.target.value })} />
+            <Input label="Obra Turno 2" value={manualFormData.entrada2_obra} onChange={e => setManualFormData({ ...manualFormData, entrada2_obra: e.target.value })} />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status Manual</label>
@@ -2504,10 +2513,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         {selectedPoint && (
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
-              <PointDetail label="Entrada 1" time={selectedPoint.e1} />
-              <PointDetail label="Saída 1" time={selectedPoint.s1} />
-              <PointDetail label="Entrada 2" time={selectedPoint.e2} />
-              <PointDetail label="Saída 2" time={selectedPoint.s2} />
+              <PointDetail label="Entrada 1" time={selectedPoint.entrada1} />
+              <PointDetail label="Saída 1" time={selectedPoint.saida1} />
+              <PointDetail label="Entrada 2" time={selectedPoint.entrada2} />
+              <PointDetail label="Saída 2" time={selectedPoint.saida2} />
             </div>
             
             <div className="p-4 bg-slate-900 rounded-2xl border border-slate-700">
@@ -2593,7 +2602,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         diarias,
         cost,
         valorDiaria,
-        workName: p.e2_obra || p.e1_obra || p.work_name || 'Não informada'
+        workName: p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada'
       };
     }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
@@ -2659,8 +2668,8 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         p.user_name,
         p.workName,
         new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-        p.e1 || '--:--',
-        p.s2 || p.s1 || '--:--',
+        p.entrada1 || '--:--',
+        p.saida2 || p.saida1 || '--:--',
         p.calculatedHours,
         p.diarias.toString(),
         `R$ ${p.cost.toFixed(2)}`
@@ -2702,8 +2711,8 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Funcionário': p.user_name,
       'Obra': p.workName,
       'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      'Entrada': p.e1 || '--:--',
-      'Saída': p.s2 || p.s1 || '--:--',
+      'Entrada': p.entrada1 || '--:--',
+      'Saída': p.saida2 || p.saida1 || '--:--',
       'Horas': p.calculatedHours,
       'Diária': p.diarias,
       'Valor (R$)': p.cost.toFixed(2)
@@ -2848,8 +2857,8 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm font-medium text-white">{p.user_name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.workName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.e1 || '--:--'}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.s2 || p.s1 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400">{p.entrada1 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400">{p.saida2 || p.saida1 || '--:--'}</td>
                   <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculatedHours}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.diarias}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</td>
@@ -2888,12 +2897,12 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <div className="flex items-center gap-3">
                   <div>
                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Entrada</p>
-                    <p className="text-sm font-bold text-white">{p.e1 || '--:--'}</p>
+                    <p className="text-sm font-bold text-white">{p.entrada1 || '--:--'}</p>
                   </div>
                   <div className="w-4 border-t border-slate-600"></div>
                   <div>
                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Saída</p>
-                    <p className="text-sm font-bold text-white">{p.s2 || p.s1 || '--:--'}</p>
+                    <p className="text-sm font-bold text-white">{p.saida2 || p.saida1 || '--:--'}</p>
                   </div>
                 </div>
                 <div className="text-right">
@@ -3015,7 +3024,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     loadTodayPoint(); 
   }, [loadTodayPoint]);
 
-  const registerPoint = async (type: 'e1' | 's1' | 'e2' | 's2', customPos?: any) => {
+  const registerPoint = async (type: 'entrada1' | 'saida1' | 'entrada2' | 'saida2', customPos?: any) => {
     console.log("Registrando ponto para:", user);
     console.log("Obra selecionada ID:", selectedWorkId);
 
@@ -3023,7 +3032,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       alert("Usuário não encontrado. Faça login novamente.");
       return;
     }
-    if ((type === 'e1' || type === 'e2') && !selectedWorkId) {
+    if ((type === 'entrada1' || type === 'entrada2') && !selectedWorkId) {
       alert('Selecione a obra antes de registrar o ponto.');
       return;
     }
@@ -3035,15 +3044,15 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     }
 
     // Validação de sequência lógica
-    if (type === 's1' && !point?.e1) {
+    if (type === 'saida1' && !point?.entrada1) {
       alert('Você precisa registrar a entrada antes da saída.');
       return;
     }
-    if (type === 'e2' && !point?.s1) {
+    if (type === 'entrada2' && !point?.saida1) {
       alert('Você precisa registrar a primeira saída antes da segunda entrada.');
       return;
     }
-    if (type === 's2' && !point?.e2) {
+    if (type === 'saida2' && !point?.entrada2) {
       alert('Você precisa registrar a segunda entrada antes da segunda saída.');
       return;
     }
@@ -3109,11 +3118,11 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           funcionario_id: user.id,
           user_name: user.name,
           date: dataLocal,
-          e1: '', s1: '', e2: '', s2: '',
-          e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
-          s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
-          e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
-          s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
+          entrada1: '', saida1: '', entrada2: '', saida2: '',
+          entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
+          saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
+          entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
+          saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
           obs: '',
           total_hours: '00:00',
           status: WorkStatus.TRABALHANDO
@@ -3127,25 +3136,25 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       const acc = pos ? pos.coords.accuracy : 0;
       // const timestampLocalizacao = pos ? pos.timestamp : Date.now();
 
-      if (type === 'e1') {
-        point.e1 = horaLocal;
-        point.e1_lat = lat; point.e1_lng = lng; point.e1_acc = acc; point.e1_address = address;
+      if (type === 'entrada1') {
+        point.entrada1 = horaLocal;
+        point.entrada1_lat = lat; point.entrada1_lng = lng; point.entrada1_acc = acc; point.entrada1_address = address;
         point.work_id = String(selectedWorkId);
         point.work_name = selectedWork?.name;
-        point.e1_obra = selectedWork?.name;
+        point.entrada1_obra = selectedWork?.name;
         continuar(point);
-      } else if (type === 's1') {
-        point.s1 = horaLocal;
-        point.s1_lat = lat; point.s1_lng = lng; point.s1_acc = acc; point.s1_address = address;
+      } else if (type === 'saida1') {
+        point.saida1 = horaLocal;
+        point.saida1_lat = lat; point.saida1_lng = lng; point.saida1_acc = acc; point.saida1_address = address;
         pausar(point);
-      } else if (type === 'e2') {
-        point.e2 = horaLocal;
-        point.e2_lat = lat; point.e2_lng = lng; point.e2_acc = acc; point.e2_address = address;
-        point.e2_obra = selectedWork?.name;
+      } else if (type === 'entrada2') {
+        point.entrada2 = horaLocal;
+        point.entrada2_lat = lat; point.entrada2_lng = lng; point.entrada2_acc = acc; point.entrada2_address = address;
+        point.entrada2_obra = selectedWork?.name;
         continuar(point);
-      } else if (type === 's2') {
-        point.s2 = horaLocal;
-        point.s2_lat = lat; point.s2_lng = lng; point.s2_acc = acc; point.s2_address = address;
+      } else if (type === 'saida2') {
+        point.saida2 = horaLocal;
+        point.saida2_lat = lat; point.saida2_lng = lng; point.saida2_acc = acc; point.saida2_address = address;
         encerrar(point);
       }
 
@@ -3158,25 +3167,25 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       if (acc > 300) gpsStatus = 'fraco';
       if (!pos) gpsStatus = 'não obtido';
       
-      if (type === 'e1') point.e1_gps_status = gpsStatus;
-      else if (type === 's1') point.s1_gps_status = gpsStatus;
-      else if (type === 'e2') point.e2_gps_status = gpsStatus;
-      else if (type === 's2') point.s2_gps_status = gpsStatus;
+      if (type === 'entrada1') point.entrada1_gps_status = gpsStatus;
+      else if (type === 'saida1') point.saida1_gps_status = gpsStatus;
+      else if (type === 'entrada2') point.entrada2_gps_status = gpsStatus;
+      else if (type === 'saida2') point.saida2_gps_status = gpsStatus;
 
       // Distance from work
-      const currentWork = works.find(w => String(w.id) === (type === 'e1' || type === 'e2' ? String(selectedWorkId) : String(point?.work_id)));
+      const currentWork = works.find(w => String(w.id) === (type === 'entrada1' || type === 'entrada2' ? String(selectedWorkId) : String(point?.work_id)));
       if (pos && currentWork && currentWork.lat && currentWork.lng) {
         const dist = calculateDistance(lat, lng, currentWork.lat, currentWork.lng);
-        if (type === 'e1') point.e1_dist = dist;
-        else if (type === 's1') point.s1_dist = dist;
-        else if (type === 'e2') point.e2_dist = dist;
-        else if (type === 's2') point.s2_dist = dist;
+        if (type === 'entrada1') point.entrada1_dist = dist;
+        else if (type === 'saida1') point.saida1_dist = dist;
+        else if (type === 'entrada2') point.entrada2_dist = dist;
+        else if (type === 'saida2') point.saida2_dist = dist;
       }
 
       // GPS Suspeito
       let prevLat = null, prevLng = null, prevTime = null;
-      if (type === 's1' && point.e1_lat && point.e1_lng) {
-        prevLat = point.e1_lat; prevLng = point.e1_lng; prevTime = Date.now() - 60000; // Mock time diff for now or use real timestamps if stored
+      if (type === 'saida1' && point.entrada1_lat && point.entrada1_lng) {
+        prevLat = point.entrada1_lat; prevLng = point.entrada1_lng; prevTime = Date.now() - 60000; // Mock time diff for now or use real timestamps if stored
       }
       // Replicating the 3km/2min logic would require storing timestamps for each point.
       // For now, let's keep it simple or add timestamps to PointRecord.
@@ -3191,7 +3200,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       onRefresh();
       setObs('');
 
-      if (type === 's1') {
+      if (type === 'saida1') {
         setIsPauseModalOpen(true);
       }
     } catch (err) {
@@ -3220,8 +3229,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setLoading(false);
   };
 
-  const nextAction = point?.encerrado ? null : !point?.e1 ? 'e1' : !point?.s1 ? 's1' : !point?.e2 ? 'e2' : !point?.s2 ? 's2' : null;
-  const actionLabels = { e1: 'Entrada 1', s1: 'Saída 1', e2: 'Entrada 2', s2: 'Saída 2' };
+  const nextAction = point?.encerrado ? null : !point?.entrada1 ? 'entrada1' : !point?.saida1 ? 'saida1' : !point?.entrada2 ? 'entrada2' : !point?.saida2 ? 'saida2' : null;
+  const actionLabels = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -3273,7 +3282,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
         {nextAction && (
           <div className="space-y-6">
-            {(nextAction === 'e1' || nextAction === 'e2') && (
+            {(nextAction === 'entrada1' || nextAction === 'entrada2') && (
               <div className="space-y-1.5 text-left">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Selecionar Obra</label>
                 <select 
@@ -3289,10 +3298,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
               </div>
             )}
 
-            {(nextAction === 's1' || nextAction === 's2') && point?.work_name && (
+            {(nextAction === 'saida1' || nextAction === 'saida2') && point?.work_name && (
               <div className="flex items-center justify-center gap-2 py-2 px-4 bg-slate-900 rounded-xl border border-slate-800">
                 <MapIcon size={16} className="text-orange-500" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Obra: {nextAction === 's1' ? (point.e1_obra || point.work_name) : (point.e2_obra || point.work_name)}</span>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Obra: {nextAction === 'saida1' ? (point.entrada1_obra || point.work_name) : (point.entrada2_obra || point.work_name)}</span>
               </div>
             )}
 
@@ -3335,10 +3344,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       </Card>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <PointMiniCard label="Entrada 1" time={point?.e1} active={!!point?.e1} obra={point?.e1_obra || point?.work_name} />
-        <PointMiniCard label="Saída 1" time={point?.s1} active={!!point?.s1} />
-        <PointMiniCard label="Entrada 2" time={point?.e2} active={!!point?.e2} obra={point?.e2_obra || point?.e1_obra || point?.work_name} />
-        <PointMiniCard label="Saída 2" time={point?.s2} active={!!point?.s2} />
+        <PointMiniCard label="Entrada 1" time={point?.entrada1} active={!!point?.entrada1} obra={point?.entrada1_obra || point?.work_name} />
+        <PointMiniCard label="Saída 1" time={point?.saida1} active={!!point?.saida1} />
+        <PointMiniCard label="Entrada 2" time={point?.entrada2} active={!!point?.entrada2} obra={point?.entrada2_obra || point?.entrada1_obra || point?.work_name} />
+        <PointMiniCard label="Saída 2" time={point?.saida2} active={!!point?.saida2} />
       </div>
 
       {point && (

@@ -41,8 +41,8 @@ service cloud.firestore {
     //   - user_name: string
     //   - date: string
     //   - work_id: string
-    //   - e1, s1, e2, s2: string
-    //   - e1_lat, e1_lng, e1_acc, e1_address, e1_dist, e1_status, e1_suspeito: various
+    //   - entrada1, saida1, entrada2, saida2: string
+    //   - entrada1_lat, entrada1_lng, entrada1_acc, entrada1_address, entrada1_dist, entrada1_status, entrada1_suspeito: various
     //   - total_hours: number
     //   - obs: string
     //   - editado_manual: number
@@ -133,24 +133,24 @@ service cloud.firestore {
              request.resource.data.date.size() == 10 &&
              isValidOptionalString('funcionario_id', 0, 100) &&
              isValidOptionalString('user_name', 0, 100) &&
-             isValidOptionalString('e1', 0, 10) &&
-             isValidOptionalString('s1', 0, 10) &&
-             isValidOptionalString('e2', 0, 10) &&
-             isValidOptionalString('s2', 0, 10) &&
-             isValidOptionalString('e1_address', 0, 500) &&
-             isValidOptionalString('s1_address', 0, 500) &&
-             isValidOptionalString('e2_address', 0, 500) &&
-             isValidOptionalString('s2_address', 0, 500) &&
-             isValidOptionalString('e1_status', 0, 100) &&
-             isValidOptionalString('s1_status', 0, 100) &&
-             isValidOptionalString('e2_status', 0, 100) &&
-             isValidOptionalString('s2_status', 0, 100) &&
-             isValidOptionalString('e1_gps_status', 0, 100) &&
-             isValidOptionalString('s1_gps_status', 0, 100) &&
-             isValidOptionalString('e2_gps_status', 0, 100) &&
-             isValidOptionalString('s2_gps_status', 0, 100) &&
-             isValidOptionalString('e1_obra', 0, 100) &&
-             isValidOptionalString('e2_obra', 0, 100) &&
+             isValidOptionalString('entrada1', 0, 10) &&
+             isValidOptionalString('saida1', 0, 10) &&
+             isValidOptionalString('entrada2', 0, 10) &&
+             isValidOptionalString('saida2', 0, 10) &&
+             isValidOptionalString('entrada1_address', 0, 500) &&
+             isValidOptionalString('saida1_address', 0, 500) &&
+             isValidOptionalString('entrada2_address', 0, 500) &&
+             isValidOptionalString('saida2_address', 0, 500) &&
+             isValidOptionalString('entrada1_status', 0, 100) &&
+             isValidOptionalString('saida1_status', 0, 100) &&
+             isValidOptionalString('entrada2_status', 0, 100) &&
+             isValidOptionalString('saida2_status', 0, 100) &&
+             isValidOptionalString('entrada1_gps_status', 0, 100) &&
+             isValidOptionalString('saida1_gps_status', 0, 100) &&
+             isValidOptionalString('entrada2_gps_status', 0, 100) &&
+             isValidOptionalString('saida2_gps_status', 0, 100) &&
+             isValidOptionalString('entrada1_obra', 0, 100) &&
+             isValidOptionalString('entrada2_obra', 0, 100) &&
              (!('obs' in request.resource.data) || (request.resource.data.obs is string && request.resource.data.obs.size() < 1000));
     }
 
