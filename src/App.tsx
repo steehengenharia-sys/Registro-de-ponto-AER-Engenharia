@@ -283,7 +283,6 @@ interface Work {
 }
 
 enum WorkStatus {
-  AUTOMATICO = 'automatico',
   TRABALHANDO = 'trabalhando',
   PAUSADO = 'pausado',
   ENCERRADO = 'encerrado'
@@ -359,16 +358,21 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
  */
 
 const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
-  if (!p) return WorkStatus.AUTOMATICO;
-  return p.status;
+  if (!p) return WorkStatus.TRABALHANDO;
+  
+  // Logic based on times as requested
+  if (p.s2) return WorkStatus.ENCERRADO;
+  if (p.s1 && !p.e2) return WorkStatus.PAUSADO;
+  if (p.e1 && !p.s1) return WorkStatus.TRABALHANDO;
+  
+  return WorkStatus.TRABALHANDO; // Safe fallback
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
   if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
   if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  if (status === WorkStatus.TRABALHANDO) return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
-  return { label: 'Automático', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
+  return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
 };
 
 // --- Components ---
@@ -1746,7 +1750,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
-        status: WorkStatus.AUTOMATICO,
+        status: WorkStatus.TRABALHANDO,
         e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
         s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
         e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
@@ -2403,11 +2407,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
               <select 
-                value={editFormData.status || WorkStatus.AUTOMATICO} 
+                value={editFormData.status || WorkStatus.TRABALHANDO} 
                 onChange={e => setEditFormData({ ...editFormData, status: e.target.value as WorkStatus })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
               >
-                <option value={WorkStatus.AUTOMATICO}>Automático</option>
                 <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
                 <option value={WorkStatus.PAUSADO}>Pausado</option>
                 <option value={WorkStatus.ENCERRADO}>Encerrado</option>
@@ -3113,7 +3116,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
           obs: '',
           total_hours: '00:00',
-          status: WorkStatus.AUTOMATICO
+          status: WorkStatus.TRABALHANDO
         };
         allPoints.push(point);
       }
@@ -3242,7 +3245,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
         {(() => {
           const status = getPointStatus(point);
-          if (status.label === 'Automático') return null;
           return (
             <div className={`mb-8 p-4 rounded-2xl border ${status.bg} ${status.color} ${status.border} inline-flex flex-col items-center gap-1`}>
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">Status Atual</span>
