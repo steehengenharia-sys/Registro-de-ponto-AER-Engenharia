@@ -282,6 +282,13 @@ interface Work {
   radius?: number;
 }
 
+enum WorkStatus {
+  AUTOMATICO = 'automatico',
+  TRABALHANDO = 'trabalhando',
+  PAUSADO = 'pausado',
+  ENCERRADO = 'encerrado'
+}
+
 interface PointRecord {
   id: string | number;
   user_id: string;
@@ -310,8 +317,19 @@ interface PointRecord {
   editado_manual?: number;
   encerrado?: number;
   last_timestamp?: number;
-  manual_status?: 'TRABALHANDO' | 'PAUSADO' | 'ENCERRADO';
+  status: WorkStatus;
 }
+
+// --- Status Management Functions ---
+const setStatus = (p: PointRecord, newStatus: WorkStatus) => {
+  if (p.status === WorkStatus.ENCERRADO) return; // Não pode mudar mais
+  p.status = newStatus;
+  if (newStatus === WorkStatus.ENCERRADO) p.encerrado = 1;
+};
+
+const pausar = (p: PointRecord) => setStatus(p, WorkStatus.PAUSADO);
+const continuar = (p: PointRecord) => setStatus(p, WorkStatus.TRABALHANDO);
+const encerrar = (p: PointRecord) => setStatus(p, WorkStatus.ENCERRADO);
 
 // --- Helpers ---
 
@@ -340,22 +358,17 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
  * issue with Vite's HMR in this environment and does not affect the application's functionality.
  */
 
-const calculateWorkStatus = (p: PointRecord | null): string => {
-  if (p?.manual_status) return p.manual_status;
-  if (!p || !p.e1) return "NÃO INICIADO";
-  if (p.encerrado || p.s2) return "JORNADA CONCLUÍDA";
-  if (p.e2) return "TRABALHANDO";
-  if (p.s1) return "PAUSADO";
-  if (p.e1) return "TRABALHANDO";
-  return "NÃO INICIADO";
+const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
+  if (!p) return WorkStatus.AUTOMATICO;
+  return p.status;
 };
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === 'JORNADA CONCLUÍDA') return { label: 'Jornada concluída', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === 'PAUSADO') return { label: 'Pausado', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  if (status === 'TRABALHANDO') return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
-  return { label: 'NÃO INICIADO', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
+  if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: p?.s2 || p?.s1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: p?.s1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === WorkStatus.TRABALHANDO) return { label: 'Trabalhando', since: p?.e2 || p?.e1 || '--:--', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+  return { label: 'Automático', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
 };
 
 // --- Components ---
@@ -1733,6 +1746,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
+        status: WorkStatus.AUTOMATICO,
         e1_lat: 0, e1_lng: 0, e1_acc: 0, e1_address: '',
         s1_lat: 0, s1_lng: 0, s1_acc: 0, s1_address: '',
         e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
@@ -2387,16 +2401,16 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <Input label="Obra Turno 2" value={editFormData.e2_obra || ''} onChange={e => setEditFormData({ ...editFormData, e2_obra: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status Manual</label>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
               <select 
-                value={editFormData.manual_status || ''} 
-                onChange={e => setEditFormData({ ...editFormData, manual_status: e.target.value as any })}
+                value={editFormData.status || WorkStatus.AUTOMATICO} 
+                onChange={e => setEditFormData({ ...editFormData, status: e.target.value as WorkStatus })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
               >
-                <option value="">Automático</option>
-                <option value="TRABALHANDO">Trabalhando</option>
-                <option value="PAUSADO">Pausado</option>
-                <option value="ENCERRADO">Encerrado</option>
+                <option value={WorkStatus.AUTOMATICO}>Automático</option>
+                <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
+                <option value={WorkStatus.PAUSADO}>Pausado</option>
+                <option value={WorkStatus.ENCERRADO}>Encerrado</option>
               </select>
             </div>
 
@@ -3098,7 +3112,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           e2_lat: 0, e2_lng: 0, e2_acc: 0, e2_address: '',
           s2_lat: 0, s2_lng: 0, s2_acc: 0, s2_address: '',
           obs: '',
-          total_hours: '00:00'
+          total_hours: '00:00',
+          status: WorkStatus.AUTOMATICO
         };
         allPoints.push(point);
       }
@@ -3115,17 +3130,20 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         point.work_id = String(selectedWorkId);
         point.work_name = selectedWork?.name;
         point.e1_obra = selectedWork?.name;
+        continuar(point);
       } else if (type === 's1') {
         point.s1 = horaLocal;
         point.s1_lat = lat; point.s1_lng = lng; point.s1_acc = acc; point.s1_address = address;
+        pausar(point);
       } else if (type === 'e2') {
         point.e2 = horaLocal;
         point.e2_lat = lat; point.e2_lng = lng; point.e2_acc = acc; point.e2_address = address;
         point.e2_obra = selectedWork?.name;
+        continuar(point);
       } else if (type === 's2') {
         point.s2 = horaLocal;
         point.s2_lat = lat; point.s2_lng = lng; point.s2_acc = acc; point.s2_address = address;
-        point.encerrado = 1;
+        encerrar(point);
       }
 
       point.last_timestamp = Date.now();
@@ -3191,7 +3209,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
     
     if (index !== -1) {
-      allPoints[index].encerrado = 1;
+      encerrar(allPoints[index]);
       await storage.savePoints(allPoints);
       loadTodayPoint();
       onRefresh();
@@ -3224,12 +3242,12 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
         {(() => {
           const status = getPointStatus(point);
-          if (status.label === 'NÃO INICIADO') return null;
+          if (status.label === 'Automático') return null;
           return (
             <div className={`mb-8 p-4 rounded-2xl border ${status.bg} ${status.color} ${status.border} inline-flex flex-col items-center gap-1`}>
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">Status Atual</span>
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${status.label !== 'Jornada concluída' ? 'animate-pulse' : ''} ${status.label === 'Pausado' ? 'bg-orange-500' : status.label === 'Jornada concluída' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
+                <div className={`w-2 h-2 rounded-full ${status.label !== 'Encerrado' ? 'animate-pulse' : ''} ${status.label === 'Pausado' ? 'bg-orange-500' : status.label === 'Encerrado' ? 'bg-slate-500' : 'bg-emerald-500'}`} />
                 <span className="text-sm font-black">{status.label}</span>
               </div>
               {status.label === 'Pausado' && (
@@ -3238,7 +3256,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
               {point?.work_name && (
                 <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {point.work_name}</span>
               )}
-              <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">{status.label === 'Jornada concluída' ? 'Último registro:' : 'Desde:'} {status.since}</span>
+              <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">{status.label === 'Encerrado' ? 'Último registro:' : 'Desde:'} {status.since}</span>
             </div>
           );
         })()}
