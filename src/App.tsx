@@ -28,15 +28,82 @@ import {
   Download,
   Search,
   HardHat,
-  Wallet
+  Wallet,
+  Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import * as XLSX from 'xlsx';
+
+import localforage from 'localforage';
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy } from 'firebase/firestore';
+
+// --- Backup Manager (Local IndexedDB) ---
+localforage.config({
+  name: 'ControlePontoDB',
+  storeName: 'backups'
+});
+
+export const backupManager = {
+  saveDailySnapshot: async (points: PointRecord[]) => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const key = `snapshot_${today}`;
+      const existing = await localforage.getItem(key);
+      if (!existing) {
+        await localforage.setItem(key, {
+          timestamp: new Date().toISOString(),
+          data: points
+        });
+        console.log(`Backup diário criado: ${key}`);
+      }
+    } catch (e) {
+      console.error('Erro ao salvar backup diário:', e);
+    }
+  },
+  saveHistory: async (point: PointRecord, action: 'CREATE' | 'UPDATE' | 'DELETE') => {
+    try {
+      const key = `history_${point.id}`;
+      let history: any[] = await localforage.getItem(key) || [];
+      history.push({
+        action,
+        timestamp: new Date().toISOString(),
+        data: { ...point }
+      });
+      // Keep only last 10 versions
+      if (history.length > 10) history = history.slice(-10);
+      await localforage.setItem(key, history);
+    } catch (e) {
+      console.error('Erro ao salvar histórico do ponto:', e);
+    }
+  },
+  getSnapshots: async () => {
+    try {
+      const keys = await localforage.keys();
+      const snapshotKeys = keys.filter(k => k.startsWith('snapshot_')).sort().reverse();
+      const snapshots = [];
+      for (const key of snapshotKeys) {
+        const data: any = await localforage.getItem(key);
+        snapshots.push({ key, timestamp: data.timestamp, count: data.data.length });
+      }
+      return snapshots;
+    } catch (e) {
+      console.error('Erro ao buscar snapshots:', e);
+      return [];
+    }
+  },
+  restoreSnapshot: async (key: string): Promise<PointRecord[]> => {
+    try {
+      const snapshot: any = await localforage.getItem(key);
+      return snapshot ? snapshot.data : [];
+    } catch (e) {
+      console.error('Erro ao restaurar snapshot:', e);
+      return [];
+    }
+  }
+};
 
 // --- Storage Helper (Now using Firestore) ---
 
@@ -131,6 +198,7 @@ const storage = {
     // but for now let's keep it simple and just add a savePoint for single updates
     for (const point of points) {
       try {
+        await backupManager.saveHistory(point, 'UPDATE');
         await setDoc(doc(db, 'points', String(point.id)), point);
       } catch (e) {
         handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
@@ -139,6 +207,7 @@ const storage = {
   },
   savePoint: async (point: PointRecord) => {
     try {
+      await backupManager.saveHistory(point, 'UPDATE');
       await setDoc(doc(db, 'points', String(point.id)), point);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
@@ -146,7 +215,12 @@ const storage = {
   },
   deletePoint: async (id: string | number) => {
     try {
-      await deleteDoc(doc(db, 'points', String(id)));
+      const docRef = doc(db, 'points', String(id));
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        await backupManager.saveHistory({ id, ...(docSnap.data() as object) } as PointRecord, 'DELETE');
+      }
+      await deleteDoc(docRef);
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, `points/${id}`);
     }
@@ -623,6 +697,12 @@ export default function App() {
       };
     }
   }, [user, refreshData]);
+
+  useEffect(() => {
+    if (points.length > 0) {
+      backupManager.saveDailySnapshot(points);
+    }
+  }, [points]);
 
   useEffect(() => {
     localStorage.setItem('ar_current_view', view);
@@ -1735,6 +1815,225 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [editFormData, setEditFormData] = useState<any>(null);
   const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSystemRestoreModalOpen, setIsSystemRestoreModalOpen] = useState(false);
+  const [systemSnapshots, setSystemSnapshots] = useState<{key: string, timestamp: string, count: number}[]>([]);
+
+  const handleSystemRestoreOpen = async () => {
+    const snapshots = await backupManager.getSnapshots();
+    setSystemSnapshots(snapshots);
+    setIsSystemRestoreModalOpen(true);
+  };
+
+  const processSystemRestore = async (key: string) => {
+    if (!confirm('Tem certeza que deseja restaurar este backup? Os dados atuais serão mesclados com os do backup.')) return;
+    setIsSubmitting(true);
+    try {
+      const backupPoints = await backupManager.restoreSnapshot(key);
+      if (backupPoints.length === 0) {
+        alert('Backup vazio ou inválido.');
+        return;
+      }
+
+      const currentPoints = await storage.getPoints();
+      let updatedCount = 0;
+
+      for (const bp of backupPoints) {
+        let cp = currentPoints.find(p => p.id === bp.id || (p.user_id === bp.user_id && p.date === bp.date));
+        let isNew = false;
+
+        if (!cp) {
+          cp = { ...bp, id: crypto.randomUUID() };
+          isNew = true;
+        }
+
+        let changed = false;
+        if (bp.entrada1 && !cp.entrada1) { cp.entrada1 = bp.entrada1; changed = true; }
+        if (bp.saida1 && !cp.saida1) { cp.saida1 = bp.saida1; changed = true; }
+        if (bp.entrada2 && !cp.entrada2) { cp.entrada2 = bp.entrada2; changed = true; }
+        if (bp.saida2 && !cp.saida2) { cp.saida2 = bp.saida2; changed = true; }
+
+        if (changed) {
+          cp.total_hours = calcularHorasRecord(cp);
+          cp.status = calculateWorkStatus(cp);
+          if (isNew) {
+            currentPoints.push(cp);
+          }
+          updatedCount++;
+        }
+      }
+
+      if (updatedCount > 0) {
+        await storage.savePoints(currentPoints);
+        await onRefresh();
+        alert(`Restauração do sistema concluída! ${updatedCount} registros foram atualizados ou criados.`);
+      } else {
+        alert("Nenhum dado novo para restaurar do backup.");
+      }
+      setIsSystemRestoreModalOpen(false);
+    } catch (e) {
+      console.error('Erro ao restaurar do sistema:', e);
+      alert('Erro ao restaurar backup.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+
+
+
+    
+    setIsSubmitting(true);
+
+    try {
+      const data = await pendingImportFile.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+      if (json.length === 0) {
+        alert("Planilha vazia.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const rows = json.slice(1);
+      console.log(`Lendo ${rows.length} linhas.`);
+
+      const groupedData: Record<string, Record<string, Record<string, string[]>>> = {};
+      let processedCount = 0;
+
+      rows.forEach((row: any[]) => {
+        let dateStr = '', timeStr = '', typeStr = '', name = 'Sem Nome', work = 'Sem Obra';
+
+        // Analyze each cell
+        row.forEach((cell) => {
+          const val = String(cell).trim();
+          if (!val) return;
+
+          // 1. Detect Date/Time
+          const matchDateTime = val.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+          if (matchDateTime) {
+            dateStr = `${matchDateTime[3]}-${matchDateTime[2]}-${matchDateTime[1]}`;
+            if (matchDateTime[4]) timeStr = `${matchDateTime[4]}:${matchDateTime[5]}`;
+          } else if (/\d{2}:\d{2}/.test(val)) {
+            timeStr = val;
+          }
+
+          // 2. Detect Type
+          if (/entrada|saida/i.test(val)) typeStr = val;
+
+          // 3. Detect Name (check against known users)
+          const userMatch = users.find(u => (u.name || '').toLowerCase() === val.toLowerCase() || (u.username || '').toLowerCase() === val.toLowerCase());
+          if (userMatch) name = userMatch.name || val;
+
+          // 4. Detect Work (check against known works)
+          const workMatch = works.find(w => (w.name || '').toLowerCase() === val.toLowerCase());
+          if (workMatch) work = workMatch.name || val;
+        });
+
+        if (dateStr && timeStr) {
+          if (importFilters.startDate && dateStr < importFilters.startDate) return;
+          if (importFilters.endDate && dateStr > importFilters.endDate) return;
+
+          if (!groupedData[name]) groupedData[name] = {};
+          if (!groupedData[name][dateStr]) groupedData[name][dateStr] = {};
+          if (!groupedData[name][dateStr][work]) groupedData[name][dateStr][work] = [];
+          
+          // Map type to index
+          let timeIdx = 0;
+          if (/extra/i.test(typeStr)) {
+            timeIdx = /saida/i.test(typeStr) ? 3 : 2;
+          } else {
+            timeIdx = /saida/i.test(typeStr) ? 1 : 0;
+          }
+          
+          groupedData[name][dateStr][work][timeIdx] = timeStr;
+          processedCount++;
+        }
+      });
+
+      console.log(`Registros processados: ${processedCount}`);
+      
+      if (processedCount === 0) {
+        alert("Nenhum dado válido encontrado na planilha.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const allPoints = await storage.getPoints();
+      let updatedCount = 0;
+
+      for (const name in groupedData) {
+        const userObj = users.find(u => (u.name || '').toLowerCase() === String(name).toLowerCase() || (u.username || '').toLowerCase() === String(name).toLowerCase());
+        
+        for (const dateStr in groupedData[name]) {
+          for (const work in groupedData[name][dateStr]) {
+            const times = groupedData[name][dateStr][work];
+
+            let point = allPoints.find(p => 
+              (userObj ? String(p.user_id) === String(userObj.id) : p.user_name === name) && 
+              p.date === dateStr
+            );
+            let isNew = false;
+
+            if (!point) {
+              point = {
+                id: crypto.randomUUID(),
+                user_id: userObj ? String(userObj.id) : '0',
+                funcionario_id: userObj ? String(userObj.id) : '0',
+                user_name: name,
+                date: dateStr,
+                entrada1: '--:--', saida1: '--:--', entrada2: '--:--', saida2: '--:--',
+                entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
+                saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
+                entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
+                saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
+                obs: `Importado da planilha - Obra: ${work}`,
+                total_hours: '00:00',
+                status: WorkStatus.NAO_INICIADO,
+                editado_manual: 1
+              };
+              isNew = true;
+            }
+
+            let changed = false;
+
+            if (times[0] && (!point.entrada1 || point.entrada1 === '--:--')) { point.entrada1 = times[0]; changed = true; }
+            if (times[1] && (!point.saida1 || point.saida1 === '--:--')) { point.saida1 = times[1]; changed = true; }
+            if (times[2] && (!point.entrada2 || point.entrada2 === '--:--')) { point.entrada2 = times[2]; changed = true; }
+            if (times[3] && (!point.saida2 || point.saida2 === '--:--')) { point.saida2 = times[3]; changed = true; }
+
+            if (changed) {
+              point.total_hours = calcularHorasRecord(point);
+              point.status = calculateWorkStatus(point);
+              if (isNew) {
+                allPoints.push(point);
+              }
+              updatedCount++;
+            }
+          }
+        }
+      }
+
+      if (updatedCount > 0) {
+        await storage.savePoints(allPoints);
+        await onRefresh();
+        alert("Dados atualizados com sucesso");
+      } else {
+        alert("Nenhum dado novo para importar.");
+      }
+
+      setIsImportModalOpen(false);
+      setPendingImportFile(null);
+
+    } catch (error) {
+      console.error("Erro ao importar planilha:", error);
+      alert("Erro ao processar a planilha. Verifique o formato.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const saveManualPoint = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2069,6 +2368,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       <div className="flex justify-between items-center mobile-header-stack">
         <h3 className="text-lg font-bold text-slate-400">Histórico de Pontos</h3>
         <div className="flex gap-3 mobile-actions-stack">
+
+          <Button onClick={handleSystemRestoreOpen} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
+            <Database size={18} className="text-purple-500" /> Backup/Restaurar
+          </Button>
+
           <Button onClick={() => setIsManualModalOpen(true)} variant="primary" className="bg-orange-600 hover:bg-orange-700 w-full-mobile">
             <Plus size={18} /> Inserir Registro Manual
           </Button>
@@ -2526,6 +2830,36 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           </div>
         )}
       </Modal>
+
+      <Modal isOpen={isSystemRestoreModalOpen} onClose={() => setIsSystemRestoreModalOpen(false)} title="Restaurar do Sistema">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-400">
+            Selecione um backup diário para restaurar. Os dados do backup serão mesclados com os dados atuais (apenas campos vazios serão preenchidos).
+          </p>
+          <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
+            {systemSnapshots.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-4">Nenhum backup encontrado.</p>
+            ) : (
+              systemSnapshots.map(snap => (
+                <div key={snap.key} className="flex items-center justify-between p-3 bg-slate-800 rounded-lg border border-slate-700">
+                  <div>
+                    <p className="font-medium text-slate-200">{new Date(snap.timestamp).toLocaleDateString('pt-BR')} às {new Date(snap.timestamp).toLocaleTimeString('pt-BR')}</p>
+                    <p className="text-xs text-slate-400">{snap.count} registros salvos</p>
+                  </div>
+                  <Button variant="secondary" onClick={() => processSystemRestore(snap.key)} disabled={isSubmitting} className="text-xs py-1 px-3">
+                    Restaurar
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex justify-end pt-4 border-t border-slate-800">
+            <Button type="button" variant="secondary" onClick={() => setIsSystemRestoreModalOpen(false)}>Fechar</Button>
+          </div>
+        </div>
+      </Modal>
+
+
 
       <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar ${exportType === 'pdf' ? 'PDF' : 'Excel'}`}>
         <form onSubmit={handleExport} className="space-y-4">
