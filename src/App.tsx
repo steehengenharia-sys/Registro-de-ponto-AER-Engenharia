@@ -34,6 +34,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 
 import localforage from 'localforage';
 import { auth, db, secondaryAuth } from './firebase';
@@ -1817,6 +1818,9 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSystemRestoreModalOpen, setIsSystemRestoreModalOpen] = useState(false);
   const [systemSnapshots, setSystemSnapshots] = useState<{key: string, timestamp: string, count: number}[]>([]);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [importFilters, setImportFilters] = useState({ startDate: '', endDate: '' });
 
   const handleSystemRestoreOpen = async () => {
     const snapshots = await backupManager.getSnapshots();
@@ -1881,7 +1885,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
 
 
-    
+  const handleImportFile = async () => {
+    if (!pendingImportFile) return;
     setIsSubmitting(true);
 
     try {
