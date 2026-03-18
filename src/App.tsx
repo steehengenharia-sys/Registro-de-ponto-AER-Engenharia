@@ -680,6 +680,24 @@ export default function App() {
     setUser(null);
   };
 
+  const instalarApp = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
+      return;
+    }
+
+    alert(
+      "Para instalar:\n\n" +
+      "1. Clique nos 3 pontinhos do navegador\n" +
+      "2. Toque em 'Adicionar à tela inicial'\n" +
+      "3. Confirme a instalação"
+    );
+  };
+
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">Carregando...</div>;
 
   if (!user) return <LoginPage deferredPrompt={deferredPrompt} setDeferredPrompt={setDeferredPrompt} />;
@@ -742,9 +760,18 @@ export default function App() {
                 <p className="text-xs text-slate-500 truncate">{user.role_name}</p>
               </div>
             </div>
-            <Button variant="secondary" className="w-full" onClick={handleLogout}>
-              <LogOut size={18} /> Sair
-            </Button>
+            <div className="space-y-3">
+              <Button 
+                variant="secondary" 
+                className="w-full text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/5" 
+                onClick={instalarApp}
+              >
+                <Smartphone size={18} /> Instalar App
+              </Button>
+              <Button variant="secondary" className="w-full" onClick={handleLogout}>
+                <LogOut size={18} /> Sair
+              </Button>
+            </div>
           </div>
         </div>
       </aside>
@@ -836,15 +863,23 @@ function LoginPage({ deferredPrompt, setDeferredPrompt }: { deferredPrompt: any,
   const [loading, setLoading] = useState(false);
 
   const instalarApp = async () => {
-    if (!deferredPrompt) {
-      alert('PWA já instalado ou não suportado pelo navegador.');
+    // ANDROID (funciona automático)
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
       return;
     }
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setDeferredPrompt(null);
-    }
+
+    // FALLBACK (quando não dá instalar direto)
+    alert(
+      "Para instalar:\n\n" +
+      "1. Clique nos 3 pontinhos do navegador\n" +
+      "2. Toque em 'Adicionar à tela inicial'\n" +
+      "3. Confirme a instalação"
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1817,6 +1852,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [backupDates, setBackupDates] = useState({ startDate: '', endDate: '' });
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
@@ -1861,6 +1897,21 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     exportarBackup(filtrados);
     updateLastBackup();
     setIsBackupModalOpen(false);
+  };
+
+  const handleClearAll = async () => {
+    try {
+      setLoading(true);
+      await storage.clearPoints();
+      setShowConfirmDelete(false);
+      alert("Dados apagados com sucesso!");
+      onRefresh();
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao apagar!");
+    } finally {
+      setLoading(false);
+    }
   };
 
 
@@ -2467,21 +2518,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <h3 className="text-lg font-bold">Filtros de Registros</h3>
           </div>
           <button
-            onClick={async () => {
-              const confirmDelete = confirm("Tem certeza que deseja apagar TODOS os dados? Essa ação não pode ser desfeita.");
-              if (!confirmDelete) return;
-              try {
-                setLoading(true);
-                await storage.clearPoints();
-                alert("Todos os dados foram apagados!");
-                onRefresh();
-              } catch (e) {
-                console.error(e);
-                alert("Erro ao apagar dados!");
-              } finally {
-                setLoading(false);
-              }
-            }}
+            onClick={() => setShowConfirmDelete(true)}
             className="text-sm bg-slate-700 hover:bg-red-600 px-3 py-1 rounded-lg flex items-center gap-2 transition"
           >
             <Trash2 size={14} /> Limpar Dados
@@ -3051,6 +3088,34 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="bg-slate-900 px-6 py-4 rounded-xl shadow-lg">
             <p className="text-white">Importando dados...</p>
+          </div>
+        </div>
+      )}
+
+      {showConfirmDelete && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
+          <div className="bg-slate-800 p-6 rounded-xl w-[350px] text-center shadow-2xl border border-slate-700">
+            <h2 className="text-lg font-bold mb-3 text-white">
+              Confirmar exclusão
+            </h2>
+            <p className="text-gray-300 mb-5">
+              Tem certeza que deseja apagar TODOS os dados?
+              Essa ação não pode ser desfeita.
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => setShowConfirmDelete(false)}
+                className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-white transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleClearAll}
+                className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white transition"
+              >
+                Sim, apagar tudo
+              </button>
+            </div>
           </div>
         </div>
       )}
