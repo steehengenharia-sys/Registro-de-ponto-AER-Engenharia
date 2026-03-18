@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Menu,
   X,
+  Smartphone,
   Phone,
   Briefcase,
   Map as MapIcon,
@@ -26,6 +27,7 @@ import {
   Building2,
   Filter,
   Download,
+  Upload,
   Search,
   HardHat,
   Wallet,
@@ -36,75 +38,26 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 
-import localforage from 'localforage';
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy } from 'firebase/firestore';
 
-// --- Backup Manager (Local IndexedDB) ---
-localforage.config({
-  name: 'ControlePontoDB',
-  storeName: 'backups'
-});
+function exportarBackup(dados: any) {
 
-export const backupManager = {
-  saveDailySnapshot: async (points: PointRecord[]) => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const key = `snapshot_${today}`;
-      const existing = await localforage.getItem(key);
-      if (!existing) {
-        await localforage.setItem(key, {
-          timestamp: new Date().toISOString(),
-          data: points
-        });
-        console.log(`Backup diário criado: ${key}`);
-      }
-    } catch (e) {
-      console.error('Erro ao salvar backup diário:', e);
-    }
-  },
-  saveHistory: async (point: PointRecord, action: 'CREATE' | 'UPDATE' | 'DELETE') => {
-    try {
-      const key = `history_${point.id}`;
-      let history: any[] = await localforage.getItem(key) || [];
-      history.push({
-        action,
-        timestamp: new Date().toISOString(),
-        data: { ...point }
-      });
-      // Keep only last 10 versions
-      if (history.length > 10) history = history.slice(-10);
-      await localforage.setItem(key, history);
-    } catch (e) {
-      console.error('Erro ao salvar histórico do ponto:', e);
-    }
-  },
-  getSnapshots: async () => {
-    try {
-      const keys = await localforage.keys();
-      const snapshotKeys = keys.filter(k => k.startsWith('snapshot_')).sort().reverse();
-      const snapshots = [];
-      for (const key of snapshotKeys) {
-        const data: any = await localforage.getItem(key);
-        snapshots.push({ key, timestamp: data.timestamp, count: data.data.length });
-      }
-      return snapshots;
-    } catch (e) {
-      console.error('Erro ao buscar snapshots:', e);
-      return [];
-    }
-  },
-  restoreSnapshot: async (key: string): Promise<PointRecord[]> => {
-    try {
-      const snapshot: any = await localforage.getItem(key);
-      return snapshot ? snapshot.data : [];
-    } catch (e) {
-      console.error('Erro ao restaurar snapshot:', e);
-      return [];
-    }
+  console.log("DADOS:", dados);
+  if (dados && dados.length > 0) {
+    alert(JSON.stringify(dados[0], null, 2));
   }
-};
+
+  const blob = new Blob([JSON.stringify(dados, null, 2)], {
+    type: "application/json",
+  });
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `backup-${new Date().toISOString()}.json`;
+  link.click();
+}
 
 // --- Storage Helper (Now using Firestore) ---
 
@@ -199,7 +152,6 @@ const storage = {
     // but for now let's keep it simple and just add a savePoint for single updates
     for (const point of points) {
       try {
-        await backupManager.saveHistory(point, 'UPDATE');
         await setDoc(doc(db, 'points', String(point.id)), point);
       } catch (e) {
         handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
@@ -208,7 +160,6 @@ const storage = {
   },
   savePoint: async (point: PointRecord) => {
     try {
-      await backupManager.saveHistory(point, 'UPDATE');
       await setDoc(doc(db, 'points', String(point.id)), point);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
@@ -217,13 +168,19 @@ const storage = {
   deletePoint: async (id: string | number) => {
     try {
       const docRef = doc(db, 'points', String(id));
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        await backupManager.saveHistory({ id, ...(docSnap.data() as object) } as PointRecord, 'DELETE');
-      }
       await deleteDoc(docRef);
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, `points/${id}`);
+    }
+  },
+  clearPoints: async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'points'));
+      for (const docSnap of querySnapshot.docs) {
+        await deleteDoc(docSnap.ref);
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, 'points');
     }
   },
 };
@@ -579,6 +536,21 @@ type ViewType = 'dashboard' | 'users' | 'points' | 'works' | 'employee' | 'histo
 export default function App() {
   const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
   const [view, setView] = useState<ViewType>(() => {
     const savedView = localStorage.getItem('ar_current_view');
     return (savedView as ViewType) || 'dashboard';
@@ -700,12 +672,6 @@ export default function App() {
   }, [user, refreshData]);
 
   useEffect(() => {
-    if (points.length > 0) {
-      backupManager.saveDailySnapshot(points);
-    }
-  }, [points]);
-
-  useEffect(() => {
     localStorage.setItem('ar_current_view', view);
   }, [view]);
 
@@ -716,7 +682,7 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">Carregando...</div>;
 
-  if (!user) return <LoginPage />;
+  if (!user) return <LoginPage deferredPrompt={deferredPrompt} setDeferredPrompt={setDeferredPrompt} />;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex font-sans">
@@ -863,11 +829,23 @@ function SidebarItem({ active, icon, label, onClick }: { active: boolean, icon: 
 
 // --- Views ---
 
-function LoginPage() {
+function LoginPage({ deferredPrompt, setDeferredPrompt }: { deferredPrompt: any, setDeferredPrompt: (v: any) => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const instalarApp = async () => {
+    if (!deferredPrompt) {
+      alert('PWA já instalado ou não suportado pelo navegador.');
+      return;
+    }
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -905,37 +883,45 @@ function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-orange-900/20 via-slate-950 to-slate-950">
+    <div className="min-h-screen bg-[#050510] flex items-center justify-center p-6">
       <motion.div 
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md"
       >
         <div className="text-center mb-10">
-          <div className="w-20 h-20 bg-orange-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-orange-900/40 rotate-3">
-            <Clock className="text-white" size={40} />
+          <div className="w-16 h-16 bg-[#ff4e00] rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-orange-900/40">
+            <Clock className="text-white" size={36} />
           </div>
-          <h1 className="text-3xl font-black text-white tracking-tight mb-2">A&R ENGENHARIA</h1>
-          <p className="text-slate-500 font-medium uppercase tracking-[0.2em] text-xs">Sistema de Controle de Ponto</p>
+          <h1 className="text-2xl font-bold text-white tracking-wide mb-1">A&R ENGENHARIA</h1>
+          <p className="text-slate-500 font-medium uppercase tracking-[0.3em] text-[10px]">Sistema de Controle de Ponto</p>
         </div>
 
-        <Card className="p-10">
+        <div className="bg-[#0a0a1a] border border-slate-800/50 rounded-[24px] p-8 shadow-2xl">
           <form onSubmit={handleSubmit} className="space-y-6">
-            <Input 
-              label="Usuário" 
-              value={username} 
-              onChange={e => setUsername(e.target.value)} 
-              placeholder="Digite seu usuário"
-              required
-            />
-            <Input 
-              label="Senha" 
-              type="password" 
-              value={password} 
-              onChange={e => setPassword(e.target.value)} 
-              placeholder="••••••••"
-              required
-            />
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Usuário</label>
+              <input 
+                type="text"
+                value={username} 
+                onChange={e => setUsername(e.target.value)} 
+                placeholder="Digite seu usuário"
+                required
+                className="w-full bg-[#0d0d26] border border-slate-800 rounded-xl px-4 py-3.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#ff4e00]/50 transition-all placeholder:text-slate-600"
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Senha</label>
+              <input 
+                type="password"
+                value={password} 
+                onChange={e => setPassword(e.target.value)} 
+                placeholder="••••••••"
+                required
+                className="w-full bg-[#0d0d26] border border-slate-800 rounded-xl px-4 py-3.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#ff4e00]/50 transition-all placeholder:text-slate-600"
+              />
+            </div>
             
             {error && (
               <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-4 rounded-xl text-sm flex items-center gap-3">
@@ -944,11 +930,23 @@ function LoginPage() {
               </div>
             )}
 
-            <Button type="submit" className="w-full py-4 text-lg" disabled={loading}>
-              {loading ? 'Entrando...' : 'Acessar Sistema'}
-            </Button>
+            <button 
+              type="submit" 
+              disabled={loading}
+              className="w-full py-4 text-base font-bold bg-[#ff4e00] hover:bg-[#ff5e10] text-white rounded-xl shadow-lg shadow-orange-900/20 transition-all active:scale-[0.98] disabled:opacity-50"
+            >
+              {loading ? 'Acessando...' : 'Acessar Sistema'}
+            </button>
           </form>
-        </Card>
+
+          <button
+            onClick={instalarApp}
+            className="w-full mt-6 py-3 text-[14px] font-semibold bg-transparent text-[#00c853] border border-[#00c853]/40 rounded-xl flex items-center justify-center gap-2 opacity-90 hover:opacity-100 hover:bg-[#00c853]/5 transition-all"
+          >
+            <Smartphone size={18} />
+            Instalar aplicativo
+          </button>
+        </div>
       </motion.div>
     </div>
   );
@@ -1803,6 +1801,7 @@ function PointHistoryItem({ label, time, obra }: { label: string, time: string, 
 }
 
 function PointsView({ user, points, users, works, onRefresh }: { user: UserData, points: PointRecord[], users: UserData[], works: Work[], onRefresh: () => void }) {
+  const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({
     userId: '',
     workId: '',
@@ -1816,70 +1815,52 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [editFormData, setEditFormData] = useState<any>(null);
   const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSystemRestoreModalOpen, setIsSystemRestoreModalOpen] = useState(false);
-  const [systemSnapshots, setSystemSnapshots] = useState<{key: string, timestamp: string, count: number}[]>([]);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [backupDates, setBackupDates] = useState({ startDate: '', endDate: '' });
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [importFilters, setImportFilters] = useState({ startDate: '', endDate: '' });
 
-  const handleSystemRestoreOpen = async () => {
-    const snapshots = await backupManager.getSnapshots();
-    setSystemSnapshots(snapshots);
-    setIsSystemRestoreModalOpen(true);
+  useEffect(() => {
+    const saved = localStorage.getItem("lastBackup");
+    if (saved) {
+      setLastBackup(saved);
+    }
+  }, []);
+
+  const updateLastBackup = () => {
+    const now = new Date().toISOString();
+    localStorage.setItem("lastBackup", now);
+    setLastBackup(now);
   };
 
-  const processSystemRestore = async (key: string) => {
-    if (!confirm('Tem certeza que deseja restaurar este backup? Os dados atuais serão mesclados com os do backup.')) return;
-    setIsSubmitting(true);
-    try {
-      const backupPoints = await backupManager.restoreSnapshot(key);
-      if (backupPoints.length === 0) {
-        alert('Backup vazio ou inválido.');
-        return;
-      }
-
-      const currentPoints = await storage.getPoints();
-      let updatedCount = 0;
-
-      for (const bp of backupPoints) {
-        let cp = currentPoints.find(p => p.id === bp.id || (p.user_id === bp.user_id && p.date === bp.date));
-        let isNew = false;
-
-        if (!cp) {
-          cp = { ...bp, id: crypto.randomUUID() };
-          isNew = true;
-        }
-
-        let changed = false;
-        if (bp.entrada1 && !cp.entrada1) { cp.entrada1 = bp.entrada1; changed = true; }
-        if (bp.saida1 && !cp.saida1) { cp.saida1 = bp.saida1; changed = true; }
-        if (bp.entrada2 && !cp.entrada2) { cp.entrada2 = bp.entrada2; changed = true; }
-        if (bp.saida2 && !cp.saida2) { cp.saida2 = bp.saida2; changed = true; }
-
-        if (changed) {
-          cp.total_hours = calcularHorasRecord(cp);
-          cp.status = calculateWorkStatus(cp);
-          if (isNew) {
-            currentPoints.push(cp);
-          }
-          updatedCount++;
-        }
-      }
-
-      if (updatedCount > 0) {
-        await storage.savePoints(currentPoints);
-        await onRefresh();
-        alert(`Restauração do sistema concluída! ${updatedCount} registros foram atualizados ou criados.`);
-      } else {
-        alert("Nenhum dado novo para restaurar do backup.");
-      }
-      setIsSystemRestoreModalOpen(false);
-    } catch (e) {
-      console.error('Erro ao restaurar do sistema:', e);
-      alert('Erro ao restaurar backup.');
-    } finally {
-      setIsSubmitting(false);
+  const handleBackupByPeriod = () => {
+    if (!backupDates.startDate || !backupDates.endDate) {
+      alert("Por favor, selecione o período completo.");
+      return;
     }
+
+    const start = new Date(backupDates.startDate);
+    const end = new Date(backupDates.endDate);
+    // Ajustar fim para o final do dia
+    end.setHours(23, 59, 59, 999);
+
+    const filtrados = points.filter(item => {
+      const dataStr = item.date;
+      if (!dataStr) return false;
+      const data = new Date(dataStr);
+      return data >= start && data <= end;
+    });
+
+    if (filtrados.length === 0) {
+      alert("Nenhum registro encontrado no período selecionado.");
+      return;
+    }
+
+    exportarBackup(filtrados);
+    updateLastBackup();
+    setIsBackupModalOpen(false);
   };
 
 
@@ -2093,6 +2074,24 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [locationData, setLocationData] = useState<{ name: string, lat: number, lng: number, acc: number, dist: number | null, status: string, suspeito?: number, gps_status?: string }[] | null>(null);
 
+  const [selecionados, setSelecionados] = useState<(string | number)[]>([]);
+
+  function selecionarTodos(marcar: boolean) {
+    if (marcar) {
+      setSelecionados(filteredPoints.map((p) => p.id));
+    } else {
+      setSelecionados([]);
+    }
+  }
+
+  function toggleSelecionado(id: string | number) {
+    setSelecionados((prev) =>
+      prev.includes(id)
+        ? prev.filter((i) => i !== id)
+        : [...prev, id]
+    );
+  }
+
   const validUsers = users.filter(u => u.role !== 'admin_master');
   const validUserIds = new Set(validUsers.map(u => String(u.id)));
 
@@ -2120,6 +2119,27 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     } catch (error) {
       console.error("Error deleting point:", error);
       alert("Erro ao excluir registro.");
+    }
+  };
+
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  const excluirSelecionados = async () => {
+    if (selecionados.length === 0) return;
+    setIsSubmitting(true);
+    try {
+      for (const id of selecionados) {
+        await storage.deletePoint(id);
+      }
+      setSelecionados([]);
+      setIsBulkDeleteModalOpen(false);
+      await onRefresh();
+      alert(`${selecionados.length} registros excluídos com sucesso.`);
+    } catch (error) {
+      console.error("Error in bulk delete:", error);
+      alert("Erro ao excluir alguns registros.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2374,11 +2394,59 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         <h3 className="text-lg font-bold text-slate-400">Histórico de Pontos</h3>
         <div className="flex gap-3 mobile-actions-stack">
 
-          <Button onClick={handleSystemRestoreOpen} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
+          <Button onClick={() => setIsBackupModalOpen(true)} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
             <Database size={18} className="text-purple-500" /> Backup/Restaurar
           </Button>
 
-          <Button onClick={() => setIsManualModalOpen(true)} variant="primary" className="bg-orange-600 hover:bg-orange-700 w-full-mobile">
+          <Button onClick={() => { exportarBackup(points); updateLastBackup(); }} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
+            <Download size={18} className="text-blue-500" /> Exportar Backup JSON
+          </Button>
+
+          <input
+            type="file"
+            accept="application/json"
+            id="inputImportBackup"
+            style={{ display: "none" }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+
+              try {
+                setLoading(true);
+
+                const text = await file.text();
+                const dados = JSON.parse(text);
+
+                if (!Array.isArray(dados)) {
+                  alert("Arquivo inválido!");
+                  return;
+                }
+
+                console.log("IMPORTANDO:", dados);
+
+                await storage.savePoints(dados);
+
+                alert("Backup restaurado com sucesso!");
+                onRefresh();
+
+              } catch (error) {
+                console.error(error);
+                alert("Erro ao importar backup!");
+              } finally {
+                setLoading(false);
+              }
+            }}
+          />
+
+          <label
+            htmlFor="inputImportBackup"
+            className="bg-slate-800 hover:bg-slate-700 w-full-mobile flex items-center gap-2 cursor-pointer justify-center px-4 py-2 rounded-lg transition"
+          >
+            <Upload size={18} className="text-green-500" />
+            Importar Backup JSON
+          </label>
+
+            <Button onClick={() => setIsManualModalOpen(true)} variant="primary" className="bg-orange-600 hover:bg-orange-700 w-full-mobile">
             <Plus size={18} /> Inserir Registro Manual
           </Button>
           <div className="flex gap-3 mobile-export-grid">
@@ -2393,9 +2461,31 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       </div>
 
       <Card className="p-6">
-        <div className="flex items-center gap-2 mb-6">
-          <Filter className="text-orange-500" size={20} />
-          <h3 className="text-lg font-bold">Filtros de Registros</h3>
+        <div className="flex justify-between items-center mb-6">
+          <div className="flex items-center gap-2">
+            <Filter className="text-orange-500" size={20} />
+            <h3 className="text-lg font-bold">Filtros de Registros</h3>
+          </div>
+          <button
+            onClick={async () => {
+              const confirmDelete = confirm("Tem certeza que deseja apagar TODOS os dados? Essa ação não pode ser desfeita.");
+              if (!confirmDelete) return;
+              try {
+                setLoading(true);
+                await storage.clearPoints();
+                alert("Todos os dados foram apagados!");
+                onRefresh();
+              } catch (e) {
+                console.error(e);
+                alert("Erro ao apagar dados!");
+              } finally {
+                setLoading(false);
+              }
+            }}
+            className="text-sm bg-slate-700 hover:bg-red-600 px-3 py-1 rounded-lg flex items-center gap-2 transition"
+          >
+            <Trash2 size={14} /> Limpar Dados
+          </button>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="space-y-1.5">
@@ -2447,11 +2537,41 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       </Card>
 
       <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl mobile-table-container">
+        {selecionados.length > 0 && (
+          <div className="bg-orange-600/10 border-b border-orange-600/20 p-4 flex items-center justify-between sticky top-0 z-10 backdrop-blur-md">
+            <p className="text-sm font-bold text-orange-500">
+              {selecionados.length} {selecionados.length === 1 ? 'registro selecionado' : 'registros selecionados'}
+            </p>
+            <div className="flex gap-2">
+              <Button 
+                variant="secondary" 
+                onClick={() => setSelecionados([])}
+                className="bg-slate-800 hover:bg-slate-700 py-1.5 text-xs"
+              >
+                Limpar Seleção
+              </Button>
+              <Button 
+                onClick={() => setIsBulkDeleteModalOpen(true)}
+                className="bg-red-600 hover:bg-red-700 text-white border-none py-1.5 text-xs"
+              >
+                <Trash2 size={14} /> Excluir Selecionados
+              </Button>
+            </div>
+          </div>
+        )}
         {/* Desktop Table */}
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse mobile-cards-table">
             <thead>
               <tr className="bg-slate-800/50 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">
+                <th className="px-6 py-5">
+                  <input 
+                    type="checkbox" 
+                    className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-orange-600 focus:ring-orange-600/50"
+                    checked={filteredPoints.length > 0 && selecionados.length === filteredPoints.length}
+                    onChange={(e) => selecionarTodos(e.target.checked)}
+                  />
+                </th>
                 <th className="px-6 py-5">Funcionário</th>
                 <th className="px-6 py-5">Status</th>
                 <th className="px-6 py-5">Data</th>
@@ -2465,7 +2585,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             </thead>
             <tbody className="divide-y divide-slate-800">
               {filteredPoints.map(p => (
-                <tr key={p.id} className="hover:bg-slate-800/30 transition-colors group">
+                <tr key={p.id} className={`hover:bg-slate-800/30 transition-colors group ${selecionados.includes(p.id) ? 'bg-orange-500/5' : ''}`}>
+                  <td className="px-6 py-4">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-orange-600 focus:ring-orange-600/50"
+                      checked={selecionados.includes(p.id)}
+                      onChange={() => toggleSelecionado(p.id)}
+                    />
+                  </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 bg-slate-800 rounded-lg flex items-center justify-center text-orange-500 font-bold text-xs border border-slate-700">
@@ -2540,11 +2668,19 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         {/* Mobile Cards */}
         <div className="md:hidden flex flex-col divide-y divide-slate-800">
           {filteredPoints.map(p => (
-            <div key={p.id} className="p-4 space-y-4">
+            <div key={p.id} className={`p-4 space-y-4 transition-colors ${selecionados.includes(p.id) ? 'bg-orange-500/5' : ''}`}>
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-orange-500 font-bold text-sm border border-slate-700">
-                    {p.user_name?.charAt(0)}
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-orange-600 focus:ring-orange-600/50"
+                      checked={selecionados.includes(p.id)}
+                      onChange={() => toggleSelecionado(p.id)}
+                    />
+                    <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-orange-500 font-bold text-sm border border-slate-700">
+                      {p.user_name?.charAt(0)}
+                    </div>
                   </div>
                   <div>
                     <p className="text-base font-bold text-white leading-tight">{p.user_name}</p>
@@ -2617,6 +2753,19 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           ))}
         </div>
       </div>
+
+      <Modal isOpen={isBulkDeleteModalOpen} onClose={() => setIsBulkDeleteModalOpen(false)} title="Confirmar Exclusão em Massa">
+        <div className="space-y-6">
+          <div className="flex items-center gap-4 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
+            <AlertCircle className="text-red-500 shrink-0" size={24} />
+            <p className="text-sm text-slate-300">Tem certeza que deseja excluir <strong>{selecionados.length}</strong> registros selecionados? Esta ação não pode ser desfeita.</p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setIsBulkDeleteModalOpen(false)} className="flex-1">Cancelar</Button>
+            <Button onClick={excluirSelecionados} loading={isSubmitting} className="flex-1 bg-red-600 hover:bg-red-700 text-white border-none">Excluir Todos</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} title="Confirmar Exclusão">
         <div className="space-y-6">
@@ -2836,30 +2985,42 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         )}
       </Modal>
 
-      <Modal isOpen={isSystemRestoreModalOpen} onClose={() => setIsSystemRestoreModalOpen(false)} title="Restaurar do Sistema">
+      <Modal isOpen={isBackupModalOpen} onClose={() => setIsBackupModalOpen(false)} title="Gerar Backup por Período">
         <div className="space-y-4">
-          <p className="text-sm text-slate-400">
-            Selecione um backup diário para restaurar. Os dados do backup serão mesclados com os dados atuais (apenas campos vazios serão preenchidos).
-          </p>
-          <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
-            {systemSnapshots.length === 0 ? (
-              <p className="text-sm text-slate-500 text-center py-4">Nenhum backup encontrado.</p>
-            ) : (
-              systemSnapshots.map(snap => (
-                <div key={snap.key} className="flex items-center justify-between p-3 bg-slate-800 rounded-lg border border-slate-700">
-                  <div>
-                    <p className="font-medium text-slate-200">{new Date(snap.timestamp).toLocaleDateString('pt-BR')} às {new Date(snap.timestamp).toLocaleTimeString('pt-BR')}</p>
-                    <p className="text-xs text-slate-400">{snap.count} registros salvos</p>
-                  </div>
-                  <Button variant="secondary" onClick={() => processSystemRestore(snap.key)} disabled={isSubmitting} className="text-xs py-1 px-3">
-                    Restaurar
-                  </Button>
-                </div>
-              ))
-            )}
+          {lastBackup ? (
+            <p className="text-sm text-gray-400 mb-3">
+              Último backup: {new Date(lastBackup).toLocaleString("pt-BR")}
+            </p>
+          ) : (
+            <p className="text-sm text-gray-500 mb-3">
+              Nenhum backup realizado ainda
+            </p>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Data Início</label>
+              <input 
+                type="date" 
+                value={backupDates.startDate} 
+                onChange={e => setBackupDates({ ...backupDates, startDate: e.target.value })}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Data Fim</label>
+              <input 
+                type="date" 
+                value={backupDates.endDate} 
+                onChange={e => setBackupDates({ ...backupDates, endDate: e.target.value })}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm"
+              />
+            </div>
           </div>
-          <div className="flex justify-end pt-4 border-t border-slate-800">
-            <Button type="button" variant="secondary" onClick={() => setIsSystemRestoreModalOpen(false)}>Fechar</Button>
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
+            <Button type="button" variant="secondary" onClick={() => setIsBackupModalOpen(false)}>Cancelar</Button>
+            <Button type="button" onClick={handleBackupByPeriod} variant="primary" className="bg-orange-600 hover:bg-orange-700">
+              Gerar Backup
+            </Button>
           </div>
         </div>
       </Modal>
@@ -2885,6 +3046,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           </div>
         </form>
       </Modal>
+
+      {loading && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-slate-900 px-6 py-4 rounded-xl shadow-lg">
+            <p className="text-white">Importando dados...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
