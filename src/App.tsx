@@ -315,10 +315,10 @@ interface Work {
 }
 
 enum WorkStatus {
-  NAO_INICIADO = 'nao_iniciado',
-  TRABALHANDO = 'trabalhando',
-  PAUSADO = 'pausado',
-  ENCERRADO = 'encerrado'
+  NAO_INICIADO = 'Não Iniciado',
+  TRABALHANDO = 'Trabalhando',
+  PAUSADO = 'Pausado',
+  ENCERRADO = 'Encerrado'
 }
 
 interface PointRecord {
@@ -637,7 +637,15 @@ export default function App() {
       }
       
       const unsubscribePoints = onSnapshot(q, async (snapshot) => {
-        const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PointRecord));
+        const pData = snapshot.docs.map(doc => {
+          const data = doc.data() as any;
+          // 🔥 PADRONIZA STATUS NA BUSCA (conforme solicitado)
+          const status = (data.status === "ENCERRADO" || data.status === "Encerrado") 
+            ? WorkStatus.ENCERRADO 
+            : WorkStatus.TRABALHANDO;
+          
+          return { ...data, id: doc.id, status } as PointRecord;
+        });
         
         // Recalculate total_hours for all points to ensure consistency
         const updatedPoints: PointRecord[] = [];
@@ -2196,7 +2204,12 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const handleEditPoint = (p: PointRecord) => {
-    setEditFormData({ ...p });
+    // 🔥 CORREÇÃO DO STATUS AO ABRIR EDIÇÃO
+    const status = (p.status === WorkStatus.ENCERRADO || String(p.status).toUpperCase() === "ENCERRADO")
+      ? WorkStatus.ENCERRADO
+      : WorkStatus.TRABALHANDO;
+
+    setEditFormData({ ...p, status });
     setIsEditModalOpen(true);
   };
 
@@ -2259,13 +2272,17 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
+      // 🔥 MAPEIA STATUS PARA O BANCO (ENCERRADO ou TRABALHANDO)
+      const payloadStatus = editFormData.status === WorkStatus.ENCERRADO ? "ENCERRADO" : "TRABALHANDO";
+
       const updated = { 
         ...editFormData, 
         editado_manual: 1,
-        status: editFormData.status?.trim() 
+        status: payloadStatus
       };
       updated.total_hours = calcularHorasRecord(updated);
       
+      console.log("Enviando para Firestore:", updated);
       await updateDoc(doc(db, "points", editFormData.id), updated);
       
       setIsEditModalOpen(false);
@@ -2916,12 +2933,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
               <select 
-                value={editFormData.status || WorkStatus.TRABALHANDO} 
+                value={editFormData.status} 
                 onChange={e => setEditFormData({ ...editFormData, status: e.target.value as WorkStatus })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
               >
                 <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
-                <option value={WorkStatus.PAUSADO}>Pausado</option>
                 <option value={WorkStatus.ENCERRADO}>Encerrado</option>
               </select>
             </div>
@@ -2992,9 +3008,9 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100"
             >
               <option value="">Automático</option>
-              <option value="TRABALHANDO">Trabalhando</option>
-              <option value="PAUSADO">Pausado</option>
-              <option value="ENCERRADO">Encerrado</option>
+              <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
+              <option value={WorkStatus.PAUSADO}>Pausado</option>
+              <option value={WorkStatus.ENCERRADO}>Encerrado</option>
             </select>
           </div>
           <div className="space-y-1.5">
