@@ -1922,6 +1922,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     setIsSubmitting(true);
 
     try {
+      if (typeof window === "undefined" || !pendingImportFile) return;
       const data = await pendingImportFile.arrayBuffer();
       const workbook = XLSX.read(data);
       const sheetName = workbook.SheetNames[0];
