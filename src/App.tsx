@@ -2258,16 +2258,20 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const allPoints = await storage.getPoints();
-      const index = allPoints.findIndex(p => String(p.id) === String(editFormData.id));
-      if (index !== -1) {
-        const updated = { ...editFormData, editado_manual: 1 };
-        updated.total_hours = calcularHorasRecord(updated);
-        allPoints[index] = updated;
-        await storage.savePoints(allPoints);
-        setIsEditModalOpen(false);
-        onRefresh();
-      }
+      const updated = { 
+        ...editFormData, 
+        editado_manual: 1,
+        status: editFormData.status?.trim() 
+      };
+      updated.total_hours = calcularHorasRecord(updated);
+      
+      await updateDoc(doc(db, "points", editFormData.id), updated);
+      
+      setIsEditModalOpen(false);
+      onRefresh();
+    } catch (error) {
+      console.error("Erro ao salvar:", error);
+      alert("Erro ao salvar");
     } finally {
       setIsSubmitting(false);
     }
@@ -3000,7 +3004,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 text-sm text-slate-100 resize-none h-24"
             />
           </div>
-          <Button type="submit" className="w-full py-4">Salvar Registro</Button>
+          <Button type="submit" className="w-full py-4" loading={isSubmitting}>Salvar Registro</Button>
         </form>
       </Modal>
 
