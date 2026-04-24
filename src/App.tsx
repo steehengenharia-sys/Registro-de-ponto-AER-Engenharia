@@ -919,7 +919,11 @@ function LoginPage({ deferredPrompt, setDeferredPrompt }: { deferredPrompt: any,
           setError('Usuário desativado.');
           break;
         default:
-          setError('Erro ao realizar login. Verifique suas credenciais.');
+          if (e.code === 'auth/network-request-failed') {
+            setError('Erro de conexão. Verifique se o domínio está autorizado no console do Firebase e se não há bloqueadores de anúncios ativos.');
+          } else {
+            setError('Erro ao realizar login. Verifique suas credenciais.');
+          }
       }
     }
     setLoading(false);
