@@ -236,7 +236,88 @@ function somarHoras(listaDeHoras: string[]): string {
 }
 
 function calcularHorasRecord(p: Partial<PointRecord>): string {
-  return calcularHoras(p.entrada1 || '', p.saida1 || '', p.entrada2 || '', p.saida2 || '');
+  const metrics = calculateRecordMetrics(p);
+  return metrics.workedHours;
+}
+
+const MINUTES_PER_DIARIA = 540; // 9h
+
+function getAutomaticShift(time: string): ShiftType {
+  if (!time || !time.includes(':')) return ShiftType.DIURNO;
+  const [h] = time.split(':').map(Number);
+  // Se entrada >= 06:00 e < 18:00 → DIURNO, Se entrada >= 18:00 ou < 06:00 → NOTURNO
+  if (h >= 6 && h < 18) return ShiftType.DIURNO;
+  return ShiftType.NOTURNO;
+}
+
+function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0) {
+  const p1 = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
+  const p2 = calcularPeriodo(p.entrada2 || '', p.saida2 || '');
+  const workedMinutes = p1 + p2;
+  
+  // Turno: Se não houver, usa o automático baseado na entrada1 ou default
+  let shift = p.tipo_turno;
+  if (!shift && p.entrada1) {
+    shift = getAutomaticShift(p.entrada1);
+  }
+  shift = shift || ShiftType.DIURNO;
+  
+  // Ajuste (+1h para Diurno) - Pode ser desabilitado manualmente se p.apply_adjustment for false
+  const hasAdjustment = shift === ShiftType.DIURNO && p.apply_adjustment !== false;
+  
+  let calculationMinutes = workedMinutes;
+  if (hasAdjustment) {
+    calculationMinutes += 60;
+  }
+  
+  const calculationHours = calculationMinutes / 60;
+  let valorTotal = 0;
+  let diariasCompletas = 0;
+  let extraHoursMinutes = 0;
+  
+  // REGRA HÍBRIDA:
+  if (calculationHours < 9) {
+    // SE horas_calculo < 9: valor = horas_calculo × 20, diarias = 0
+    valorTotal = calculationHours * 20;
+    diariasCompletas = 0;
+  } else if (calculationHours <= 12) {
+    // SE horas_calculo >= 9 E <= 12: valor = 180, diarias = 1
+    valorTotal = 180;
+    diariasCompletas = 1;
+  } else {
+    // SE horas_calculo > 12: valor = 180 + ((horas_calculo - 9) × 20)
+    extraHoursMinutes = (calculationHours - 9) * 60;
+    valorTotal = 180 + (extraHoursMinutes / 60 * 20);
+    diariasCompletas = 1;
+  }
+
+  // Se valorDiaria for diferente de 180 (ex: 200), ajustamos proporcionalmente
+  // Mas a regra diz fixo 180/9=20. Vamos respeitar o valor da diária do usuário se existir.
+  const valorDiariaEfetivo = valorDiaria || 180;
+  if (valorDiariaEfetivo !== 180) {
+    const hourlyRate = valorDiariaEfetivo / 9;
+    if (calculationHours < 9) {
+      valorTotal = calculationHours * hourlyRate;
+    } else if (calculationHours <= 12) {
+      valorTotal = valorDiariaEfetivo;
+    } else {
+      valorTotal = valorDiariaEfetivo + ((calculationHours - 9) * hourlyRate);
+    }
+  }
+
+  return {
+    shift,
+    workedMinutes,
+    workedHours: formatarMinutos(workedMinutes),
+    calculationMinutes,
+    calculationHours: formatarMinutos(calculationMinutes),
+    diariasCompletas,
+    extraHoursMinutes,
+    extraHours: calculationHours > 9 ? formatarMinutos(Math.round(extraHoursMinutes)) : '00:00',
+    totalValue: valorTotal,
+    hasAdjustment,
+    diariasEquivalentes: calculationMinutes / MINUTES_PER_DIARIA
+  };
 }
 
 enum OperationType {
@@ -321,6 +402,11 @@ enum WorkStatus {
   ENCERRADO = 'Encerrado'
 }
 
+enum ShiftType {
+  DIURNO = 'Diurno',
+  NOTURNO = 'Noturno'
+}
+
 interface PointRecord {
   id: string | number;
   user_id: string;
@@ -350,6 +436,17 @@ interface PointRecord {
   encerrado?: number;
   last_timestamp?: number;
   status: WorkStatus;
+  tipo_turno?: ShiftType;
+  worked_hours?: string;
+  diarias_completas?: number;
+  minutos_restantes?: number;
+  horas_restantes?: string;
+  calculation_minutes?: number;
+  calculation_hours?: string;
+  extra_hours?: string;
+  apply_adjustment?: boolean;
+  value_total?: number;
+  diarias_equivalentes?: number;
 }
 
 // --- Status Management Functions ---
@@ -368,22 +465,17 @@ const encerrar = (p: PointRecord) => setStatus(p, WorkStatus.ENCERRADO);
 const calculateDiariasForUser = (totalHoursStr: string) => {
   if (!totalHoursStr || !totalHoursStr.includes(':')) return 0;
   const [h, m] = totalHoursStr.split(':').map(Number);
-  const totalHours = h + m / 60;
-  const diariasInteiras = Math.floor(totalHours / 10);
-  const horasRestantes = totalHours % 10;
-  
-  let ajuste = 0;
-  if (horasRestantes >= 4 && horasRestantes < 7) {
-    ajuste = 0.5;
-  } else if (horasRestantes >= 7) {
-    ajuste = 1;
-  }
-  
-  return diariasInteiras + ajuste;
+  const totalMinutes = h * 60 + m;
+  // No sistema híbrido, retorna o proporcional exato de diárias
+  return totalMinutes / MINUTES_PER_DIARIA;
 };
 
 const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
-  return calculateDiariasForUser(totalHoursStr) * valorDiaria;
+  if (!totalHoursStr || !totalHoursStr.includes(':')) return 0;
+  const [h, m] = totalHoursStr.split(':').map(Number);
+  const totalMinutes = h * 60 + m;
+  const valorDiariaEfetivo = valorDiaria || 180;
+  return totalMinutes * (valorDiariaEfetivo / MINUTES_PER_DIARIA);
 };
 /**
  * NOTE: The "WebSocket closed without opened" error seen in the console is a known 
@@ -1028,7 +1120,11 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       const userMinutesMap = new Map();
 
       todayPoints.forEach((p: any) => {
-        const minutes = calcularPeriodo(p.entrada1, p.saida1) + calcularPeriodo(p.entrada2, p.saida2);
+        const user = validUsers.find((u: any) => String(u.id) === String(p.user_id));
+        const valorDiaria = user?.valor_diaria || 180;
+        const metrics = calculateRecordMetrics(p, valorDiaria);
+        
+        const minutes = metrics.workedMinutes;
         totalMinutes += minutes;
         presentUsers.add(String(p.user_id));
         
@@ -1047,7 +1143,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         const work = workMap.get(workName);
         work.employees.add(userIdStr);
         work.minutes += minutes;
-        
+        work.cost += metrics.totalValue;
+
         // Track minutes per user in this work for cost distribution
         if (!work.userMinutes.has(userIdStr)) {
             work.userMinutes.set(userIdStr, 0);
@@ -1055,28 +1152,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         work.userMinutes.set(userIdStr, work.userMinutes.get(userIdStr) + minutes);
       });
 
-      // Calculate cost per user and distribute to works
-      userMinutesMap.forEach((totalMinutesToday, userId) => {
-        try {
-          const user = validUsers.find((u: any) => String(u.id) === String(userId));
-          if (user && user.valor_diaria) {
-            const totalHoursTodayStr = formatarMinutos(totalMinutesToday);
-            const userTotalCostToday = calculateCostForUser(totalHoursTodayStr, user.valor_diaria);
-            totalCost += userTotalCostToday;
-            
-            // Distribute to works
-            workMap.forEach((work) => {
-                if (work.userMinutes.has(userId)) {
-                    const userMinutesInWork = work.userMinutes.get(userId);
-                    const proportion = totalMinutesToday > 0 ? userMinutesInWork / totalMinutesToday : 0;
-                    work.cost += userTotalCostToday * proportion;
-                }
-            });
-          }
-        } catch (e) {
-          console.error("Erro ao calcular custo no dashboard:", e);
-        }
-      });
+      // Update totalCost
+      totalCost = Array.from(workMap.values()).reduce((acc, curr) => acc + curr.cost, 0);
 
       const activeWorks = Array.from(workMap.values())
         .map(w => ({ name: w.name, employees: w.employees.size, hours: formatarMinutos(w.minutes), cost: w.cost }))
@@ -1125,15 +1202,15 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         }
       });
 
-      // 4. Incomplete hours (< 10h)
+      // 4. Incomplete hours (< 9h)
       let incompleteCount = 0;
       userMinutesMap.forEach((minutes) => {
-        if (minutes < 10 * 60) {
+        if (minutes < 9 * 60) {
           incompleteCount++;
         }
       });
       if (incompleteCount > 0) {
-        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 10h trabalhadas`);
+        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 9h trabalhadas`);
       }
 
       setDashboardData({
@@ -1809,11 +1886,17 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
                   <span className="text-xs font-bold text-orange-500 uppercase tracking-widest">Obra: {p.work_name || 'Não informada'}</span>
                 </div>
               </div>
-              <div className="text-right flex items-center gap-3">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total:</span>
-                <span className="px-3 py-1 bg-slate-900 rounded-lg text-sm font-black text-white border border-slate-700">
-                  {p.total_hours}
-                </span>
+              <div className="text-right flex flex-col items-end gap-1">
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Trab:</span>
+                  <span className="px-2.5 py-1 bg-slate-900 rounded-lg text-sm font-black text-white border border-slate-700">
+                    {p.total_hours}
+                  </span>
+                </div>
+                <div className="flex gap-4">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias: <span className="text-emerald-500 font-black">{p.diarias_completas || 0}</span></p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Restante: <span className="text-orange-500 font-black">{p.horas_restantes || '00:00'}</span></p>
+                </div>
               </div>
             </div>
 
@@ -1860,7 +1943,18 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [editFormData, setEditFormData] = useState<any>(null);
-  const [manualFormData, setManualFormData] = useState<any>({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
+  const [manualFormData, setManualFormData] = useState<any>({ 
+    user_id: '', 
+    date: '', 
+    entrada1: '', 
+    saida1: '', 
+    entrada2: '', 
+    saida2: '', 
+    entrada1_obra: '', 
+    entrada2_obra: '', 
+    obs: '',
+    apply_adjustment: true
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -2106,6 +2200,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         entrada1_obra: manualFormData.entrada1_obra,
         entrada2_obra: manualFormData.entrada2_obra,
         obs: manualFormData.obs,
+        tipo_turno: manualFormData.tipo_turno || ShiftType.DIURNO,
+        apply_adjustment: manualFormData.apply_adjustment !== false,
         editado_manual: 1,
         total_hours: '00:00',
         status: manualFormData.manual_status || WorkStatus.NAO_INICIADO,
@@ -2115,7 +2211,16 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
       };
 
-      newPoint.total_hours = calcularHorasRecord(newPoint);
+      const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0);
+      newPoint.total_hours = metrics.workedHours;
+      newPoint.worked_hours = metrics.workedHours;
+      newPoint.calculation_minutes = metrics.calculationMinutes;
+      newPoint.calculation_hours = metrics.calculationHours;
+      newPoint.diarias_completas = metrics.diariasCompletas;
+      newPoint.extra_hours = metrics.extraHours;
+      newPoint.value_total = metrics.totalValue;
+      newPoint.diarias_equivalentes = metrics.diariasEquivalentes;
+
       allPoints.push(newPoint);
       await storage.savePoints(allPoints);
 
@@ -2279,12 +2384,24 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       // 🔥 MAPEIA STATUS PARA O BANCO (ENCERRADO ou TRABALHANDO)
       const payloadStatus = editFormData.status === WorkStatus.ENCERRADO ? "ENCERRADO" : "TRABALHANDO";
 
+      const userObj = users.find(u => String(u.id) === String(editFormData.user_id));
+      const metrics = calculateRecordMetrics(editFormData, userObj?.valor_diaria || 0);
+
       const updated = { 
         ...editFormData, 
         editado_manual: 1,
-        status: payloadStatus
+        status: payloadStatus,
+        tipo_turno: metrics.shift,
+        apply_adjustment: editFormData.apply_adjustment !== false,
+        total_hours: metrics.workedHours,
+        worked_hours: metrics.workedHours,
+        calculation_minutes: metrics.calculationMinutes,
+        calculation_hours: metrics.calculationHours,
+        diarias_completas: metrics.diariasCompletas,
+        extra_hours: metrics.extraHours,
+        value_total: metrics.totalValue,
+        diarias_equivalentes: metrics.diariasEquivalentes
       };
-      updated.total_hours = calcularHorasRecord(updated);
       
       console.log("Enviando para Firestore:", updated);
       await updateDoc(doc(db, "points", editFormData.id), updated);
@@ -2300,41 +2417,33 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const calculateTotals = (pointsToCalculate: PointRecord[]) => {
-    const totalHours = somarHoras(pointsToCalculate.map(p => p.total_hours));
-    
-    // Group minutes by user
-    const userMinutes = pointsToCalculate.reduce((acc: any, p: PointRecord) => {
-        const uid = String(p.user_id);
-        const minutes = calcularPeriodo(p.entrada1, p.saida1) + calcularPeriodo(p.entrada2, p.saida2);
-        acc[uid] = (acc[uid] || 0) + minutes;
-        return acc;
-    }, {});
-
-    let totalDiarias = 0;
+    let totalWorkedMinutes = 0;
+    let totalDiariasEq = 0;
     let valorTotal = 0;
-
-    Object.keys(userMinutes).forEach(userId => {
-        try {
-          const minutes = userMinutes[userId];
-          const hoursStr = formatarMinutos(minutes);
-          const user = users.find(u => String(u.id) === String(userId));
-          const valorDiaria = user?.valor_diaria || 0;
-          
-          totalDiarias += calculateDiariasForUser(hoursStr);
-          valorTotal += calculateCostForUser(hoursStr, valorDiaria);
-        } catch (e) {
-          console.error("Erro ao calcular totais no relatório:", e);
-        }
+    
+    pointsToCalculate.forEach(p => {
+      const user = users.find(u => String(u.id) === String(p.user_id));
+      const valorDiaria = user?.valor_diaria || 180;
+      const metrics = calculateRecordMetrics(p, valorDiaria);
+      
+      totalWorkedMinutes += metrics.workedMinutes;
+      totalDiariasEq += metrics.diariasEquivalentes;
+      valorTotal += metrics.totalValue;
     });
 
-    const valorDiariaNum = parseFloat(diariaValue) || 0;
+    const valorDiariaNum = parseFloat(diariaValue) || 180;
 
-    return { totalHours, totalDiarias, valorDiariaNum, valorTotal };
+    return { 
+      totalHoursStr: formatarMinutos(totalWorkedMinutes), 
+      totalDiariasEq, 
+      valorDiariaNum, 
+      valorTotal 
+    };
   };
 
   const generatePDF = () => {
-    const doc = new jsPDF();
-    const { totalHours, totalDiarias, valorDiariaNum, valorTotal } = calculateTotals(filteredPoints);
+    const doc = new jsPDF('l', 'mm', 'a4');
+    const { totalHoursStr, totalDiariasEq, valorTotal } = calculateTotals(filteredPoints);
 
     doc.setFontSize(18);
     doc.text('A&R Engenharia - Relatório de Ponto', 14, 15);
@@ -2345,114 +2454,90 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const workName = filters.workId ? works.find(w => String(w.id) === String(filters.workId))?.name : 'Todas';
     doc.text(`Funcionário: ${employeeName} | Obra: ${workName}`, 14, 27);
 
-    const tableData = filteredPoints.map(p => [
-      p.user_name || '-',
-      new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      p.entrada1 || '--:--',
-      p.saida1 || '--:--',
-      p.entrada2 || '--:--',
-      p.saida2 || '--:--',
-      `${p.total_hours || '00:00'}`
-    ]);
-
-    autoTable(doc, {
-      startY: 30,
-      head: [['Funcionário', 'Data', 'Entrada 1', 'Saída 1', 'Entrada 2', 'Saída 2', 'Horas Trabalhadas']],
-      body: tableData,
-      theme: 'grid',
-      headStyles: { fillColor: [15, 23, 42] }, // slate-900
+    const tableData = filteredPoints.map(p => {
+      const userObj = users.find(u => String(u.id) === String(p.user_id));
+      const metrics = calculateRecordMetrics(p, userObj?.valor_diaria || 180);
+      
+      return [
+        p.user_name || '-',
+        new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+        p.tipo_turno || 'Diurno',
+        metrics.workedHours,
+        metrics.calculationHours,
+        metrics.diariasCompletas.toString(),
+        metrics.extraHours,
+        `R$ ${metrics.totalValue.toFixed(2)}`
+      ];
     });
 
-    const finalY = (doc as any).lastAutoTable.finalY || 30;
-    
-    doc.setFontSize(12);
-    doc.text(`Total de horas trabalhadas: ${totalHours}`, 14, finalY + 10);
-    doc.text(`Total de diárias: ${totalDiarias}`, 14, finalY + 18);
-    doc.text(`Valor da diária: R$ ${valorDiariaNum.toFixed(2)}`, 14, finalY + 26);
-    doc.text(`Valor total: R$ ${valorTotal.toFixed(2)}`, 14, finalY + 34);
+    autoTable(doc, {
+      startY: 32,
+      head: [['Funcionário', 'Data', 'Turno', 'H. Trab.', 'H. Calc.', 'Diárias', 'Extra', 'Valor Total']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [249, 115, 22] },
+      styles: { fontSize: 8 }
+    });
 
-    doc.save('relatorio_ponto.pdf');
+    const finalY = (doc as any).lastAutoTable.finalY + 10;
+    doc.setFontSize(11);
+    doc.text(`TOTAIS GERAIS:`, 14, finalY);
+    doc.text(`Horas: ${totalHoursStr} | Diárias Eq: ${totalDiariasEq.toFixed(2)} | Valor: R$ ${valorTotal.toFixed(2)}`, 14, finalY + 6);
+
+    doc.save(`Relatorio_Ponto_${new Date().toLocaleDateString()}.pdf`);
     setIsExportModalOpen(false);
   };
 
   const generateExcel = () => {
-    const { totalHours, totalDiarias, valorDiariaNum, valorTotal } = calculateTotals(filteredPoints);
+    const { totalHoursStr, totalDiariasEq, valorTotal } = calculateTotals(filteredPoints);
 
-    const data = filteredPoints.map(p => ({
-      'Funcionário': p.user_name || '-',
-      'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      'Entrada 1': p.entrada1 || '--:--',
-      'Saída 1': p.saida1 || '--:--',
-      'Entrada 2': p.entrada2 || '--:--',
-      'Saída 2': p.saida2 || '--:--',
-      'Turnos': p.entrada2 ? 2 : 1,
-      'Obras': (p.entrada2 && p.entrada2_obra && p.entrada2_obra !== p.entrada1_obra) ? `T1: ${p.entrada1_obra || '---'} / T2: ${p.entrada2_obra}` : (p.entrada1_obra || p.entrada2_obra || p.work_name || '---'),
-      'Horas Trabalhadas': p.total_hours || '00:00'
-    }));
+    const data = filteredPoints.map(p => {
+      const userObj = users.find(u => String(u.id) === String(p.user_id));
+      const metrics = calculateRecordMetrics(p, userObj?.valor_diaria || 180);
+
+      return {
+        'Funcionário': p.user_name || '-',
+        'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+        'Turno': p.tipo_turno || 'Diurno',
+        'Horas Trabalhadas': metrics.workedHours,
+        'Horas Cálculo': metrics.calculationHours,
+        'Diárias Completas': metrics.diariasCompletas,
+        'Horas Extras': metrics.extraHours,
+        'Valor Total (R$)': metrics.totalValue.toFixed(2),
+        'Observação': p.obs || ''
+      };
+    });
 
     // Add empty row
     data.push({
       'Funcionário': '',
       'Data': '',
-      'Entrada 1': '',
-      'Saída 1': '',
-      'Entrada 2': '',
-      'Saída 2': '',
-      'Turnos': '' as any,
-      'Obras': '',
-      'Horas Trabalhadas': '' as any
+      'Turno': '',
+      'Horas Trabalhadas': '',
+      'Horas Cálculo': '',
+      'Diárias Completas': '' as any,
+      'Horas Extras': '',
+      'Valor Total (R$)': '',
+      'Observação': ''
     });
 
     // Add totals
     data.push({
-      'Funcionário': 'Total de horas trabalhadas',
+      'Funcionário': 'TOTAIS GERAIS',
       'Data': '',
-      'Entrada 1': '',
-      'Saída 1': '',
-      'Entrada 2': '',
-      'Saída 2': '',
-      'Turnos': '' as any,
-      'Obras': '',
-      'Horas Trabalhadas': totalHours as any
-    });
-    data.push({
-      'Funcionário': 'Total de diárias calculadas',
-      'Data': '',
-      'Entrada 1': '',
-      'Saída 1': '',
-      'Entrada 2': '',
-      'Saída 2': '',
-      'Turnos': '' as any,
-      'Obras': '',
-      'Horas Trabalhadas': totalDiarias as any
-    });
-    data.push({
-      'Funcionário': 'Valor da diária',
-      'Data': '',
-      'Entrada 1': '',
-      'Saída 1': '',
-      'Entrada 2': '',
-      'Saída 2': '',
-      'Turnos': '' as any,
-      'Obras': '',
-      'Horas Trabalhadas': valorDiariaNum as any
-    });
-    data.push({
-      'Funcionário': 'Valor total a pagar',
-      'Data': '',
-      'Entrada 1': '',
-      'Saída 1': '',
-      'Entrada 2': '',
-      'Saída 2': '',
-      'Turnos': '' as any,
-      'Obras': '',
-      'Horas Trabalhadas': valorTotal as any
+      'Turno': '',
+      'Horas Trabalhadas': totalHoursStr,
+      'Horas Cálculo': '',
+      'Diárias Completas': '' as any,
+      'Horas Extras': '',
+      'Valor Total (R$)': valorTotal.toFixed(2),
+      'Observação': ''
     });
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Registros');
-    XLSX.writeFile(wb, 'relatorio_ponto.xlsx');
+    XLSX.writeFile(wb, `Relatorio_Ponto_${new Date().toLocaleDateString()}.xlsx`);
     setIsExportModalOpen(false);
   };
 
@@ -2642,7 +2727,12 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 <th className="px-6 py-5">Saída 1</th>
                 <th className="px-6 py-5">Entrada 2</th>
                 <th className="px-6 py-5">Saída 2</th>
-                <th className="px-6 py-5">Horas Trabalhadas</th>
+                <th className="px-6 py-5">Turno</th>
+                <th className="px-6 py-5">H. Trab.</th>
+                <th className="px-6 py-5">H. Calc.</th>
+                <th className="px-6 py-5">Diárias</th>
+                <th className="px-6 py-5">Extra</th>
+                <th className="px-6 py-5">Valor</th>
                 <th className="px-6 py-5 text-right">Ações</th>
               </tr>
             </thead>
@@ -2689,8 +2779,36 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</td>
                   <td className="px-6 py-4">
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.tipo_turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                      {p.tipo_turno || ShiftType.DIURNO}
+                    </span>
+                    {p.tipo_turno === ShiftType.DIURNO && (
+                      <span className={`ml-1 text-[9px] font-bold px-1 py-0.5 rounded ${p.apply_adjustment !== false ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                        {p.apply_adjustment !== false ? '+1h' : 'Sem adj.'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {p.total_hours}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-xs font-bold text-slate-400">
+                      {p.calculation_hours || '--:--'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-xs font-black text-emerald-500">
+                      {p.diarias_completas || 0}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-xs font-bold text-orange-400">
+                    {p.extra_hours || '00:00'}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-xs font-black text-emerald-400">
+                      R$ {(p.value_total || 0).toFixed(2)}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
@@ -2781,15 +2899,30 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 </div>
               </div>
 
-              <div className="flex justify-between items-center pt-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total:</span>
-                  <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
-                    {p.total_hours}
-                  </span>
+              <div className="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800 overflow-x-auto gap-4">
+                <div className="space-y-1 min-w-fit">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</p>
+                  <p className="text-xs font-black text-white">{p.total_hours}</p>
                 </div>
-                
-                <div className="flex justify-end items-center gap-1">
+                <div className="space-y-1 min-w-fit text-center">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Cálc.</p>
+                  <p className="text-xs font-black text-slate-400">{p.calculation_hours || p.total_hours}</p>
+                </div>
+                <div className="space-y-1 min-w-fit text-center">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Diárias</p>
+                  <p className="text-xs font-black text-emerald-500">{p.diarias_completas || 0}</p>
+                </div>
+                <div className="space-y-1 min-w-fit text-center">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Extra</p>
+                  <p className="text-xs font-black text-orange-400">{p.extra_hours || '00:00'}</p>
+                </div>
+                <div className="space-y-1 min-w-fit text-right">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Valor</p>
+                  <p className="text-xs font-black text-white">R$ {(p.value_total || 0).toFixed(2)}</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end items-center pt-2">
                   {(p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                     <button 
                       onClick={() => showWarning(p)} 
@@ -2812,10 +2945,9 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   <button onClick={() => showLocation(p)} className="p-2 bg-blue-500/10 rounded-lg text-blue-500"><MapPin size={16} /></button>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
 
       <Modal isOpen={isBulkDeleteModalOpen} onClose={() => setIsBulkDeleteModalOpen(false)} title="Confirmar Exclusão em Massa">
         <div className="space-y-6">
@@ -2923,11 +3055,45 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <Input label="Saída 2" value={editFormData.saida2 || ''} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
             </div>
             
-            <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex justify-between items-center">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Calculado:</span>
-              <span className="text-lg font-black text-orange-500">
-                {calcularHorasRecord(editFormData)}
-              </span>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Trabalhadas:</span>
+                  <span className="text-lg font-black text-white">
+                    {editFormData.total_hours}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center border-t border-slate-700 pt-2">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cálculo (+1h):</span>
+                  <span className="text-lg font-black text-orange-500">
+                    {editFormData.calculation_hours || editFormData.total_hours}
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
+                  <select 
+                    value={editFormData.tipo_turno || ShiftType.DIURNO} 
+                    onChange={e => setEditFormData({ ...editFormData, tipo_turno: e.target.value as ShiftType })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-slate-100 font-bold"
+                  >
+                    <option value={ShiftType.DIURNO}>Diurno</option>
+                    <option value={ShiftType.NOTURNO}>Noturno</option>
+                  </select>
+                </div>
+                {editFormData.tipo_turno === ShiftType.DIURNO && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="checkbox" 
+                      checked={editFormData.apply_adjustment !== false}
+                      onChange={e => setEditFormData({ ...editFormData, apply_adjustment: e.target.checked })}
+                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-600 focus:ring-orange-600/50"
+                    />
+                    <span className="text-xs font-bold text-slate-300">Aplicar +1h (Almoço Pago)</span>
+                  </label>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -2993,7 +3159,33 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               ))}
             </select>
           </div>
-          <Input label="Data" type="date" value={manualFormData.date} onChange={e => setManualFormData({ ...manualFormData, date: e.target.value })} required />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Data" type="date" value={manualFormData.date} onChange={e => setManualFormData({ ...manualFormData, date: e.target.value })} required />
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
+              <div className="flex flex-col gap-3">
+                <select 
+                  value={manualFormData.tipo_turno || ShiftType.DIURNO} 
+                  onChange={e => setManualFormData({ ...manualFormData, tipo_turno: e.target.value as ShiftType })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
+                >
+                  <option value={ShiftType.DIURNO}>Diurno</option>
+                  <option value={ShiftType.NOTURNO}>Noturno</option>
+                </select>
+                {(manualFormData.tipo_turno || ShiftType.DIURNO) === ShiftType.DIURNO && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="checkbox" 
+                      checked={manualFormData.apply_adjustment !== false}
+                      onChange={e => setManualFormData({ ...manualFormData, apply_adjustment: e.target.checked })}
+                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-600 focus:ring-orange-600/50"
+                    />
+                    <span className="text-xs font-bold text-slate-300">Aplicar +1h (Almoço Pago)</span>
+                  </label>
+                )}
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <Input label="Entrada 1" value={manualFormData.entrada1} onChange={e => setManualFormData({ ...manualFormData, entrada1: e.target.value })} placeholder="00:00" />
             <Input label="Saída 1" value={manualFormData.saida1} onChange={e => setManualFormData({ ...manualFormData, saida1: e.target.value })} placeholder="00:00" />
@@ -3189,18 +3381,20 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
     const processed = filtered.map(p => {
       const user = users.find(u => String(u.id) === String(p.user_id));
-      const valorDiaria = user?.valor_diaria || 0;
-      const hours = p.total_hours || '00:00';
-      const diarias = calculateDiariasForUser(hours);
-      const cost = diarias * valorDiaria;
+      const valorDiaria = user?.valor_diaria || 180;
+      const metrics = calculateRecordMetrics(p, valorDiaria);
       
       return {
         ...p,
-        calculatedHours: hours,
-        diarias,
-        cost,
+        calculatedHours: metrics.workedHours,
+        calculationHours: metrics.calculationHours,
+        diarias: metrics.diariasEquivalentes,
+        diariasCompletas: metrics.diariasCompletas,
+        extraHours: metrics.extraHours,
+        cost: metrics.totalValue,
         valorDiaria,
-        workName: p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada'
+        workName: p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada',
+        turno: metrics.shift
       };
     }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
@@ -3208,12 +3402,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
     const totalHours = somarHoras(processed.map(p => p.calculatedHours));
     const totalDiarias = processed.reduce((acc, curr) => acc + curr.diarias, 0);
+    const totalDiariasCompletas = processed.reduce((acc, curr) => acc + curr.diariasCompletas, 0);
     const totalCost = processed.reduce((acc, curr) => acc + curr.cost, 0);
     const uniqueEmployees = new Set(processed.map(p => String(p.user_id))).size;
 
     setSummary({
       totalHours,
-      totalDiarias,
+      totalDiarias: totalDiariasCompletas, // Usando diárias completas para o resumo visual
       totalCost,
       totalEmployees: uniqueEmployees
     });
@@ -3261,15 +3456,16 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
     autoTable(doc, {
       startY: 35,
-      head: [['Funcionário', 'Obra', 'Data', 'Entrada', 'Saída', 'Horas', 'Diária', 'Valor']],
+      head: [['Func.', 'Obra', 'Data', 'Turno', 'H. Trab.', 'H. Calc.', 'Diárias', 'Extra', 'Valor']],
       body: reportData.map(p => [
         p.user_name,
         p.workName,
         new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-        p.entrada1 || '--:--',
-        p.saida2 || p.saida1 || '--:--',
+        p.turno || 'Diurno',
         p.calculatedHours,
-        p.diarias.toString(),
+        p.calculationHours || p.calculatedHours,
+        p.diariasCompletas.toString(),
+        p.extraHours || '00:00',
         `R$ ${p.cost.toFixed(2)}`
       ]),
       theme: 'grid',
@@ -3309,11 +3505,12 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Funcionário': p.user_name,
       'Obra': p.workName,
       'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      'Entrada': p.entrada1 || '--:--',
-      'Saída': p.saida2 || p.saida1 || '--:--',
-      'Horas': p.calculatedHours,
-      'Diária': p.diarias,
-      'Valor (R$)': p.cost.toFixed(2)
+      'Turno': p.turno || 'Diurno',
+      'H. Trabalhadas': p.calculatedHours,
+      'H. Cálculo': p.calculationHours || p.calculatedHours,
+      'Diárias Completas': p.diariasCompletas,
+      'Horas Extras': p.extraHours || '00:00',
+      'Valor Total (R$)': p.cost.toFixed(2)
     }));
 
     const summaryData = workSummary.map(w => ({
@@ -3442,10 +3639,11 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Funcionário</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Obra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Data</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Entrada</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Saída</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Horas</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diária</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Turno</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Calc.</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Extra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Valor</th>
               </tr>
             </thead>
@@ -3455,16 +3653,21 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm font-medium text-white">{p.user_name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.workName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.entrada1 || '--:--'}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.saida2 || p.saida1 || '--:--'}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculatedHours}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.diarias}</td>
+                  <td className="px-6 py-4">
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                      {p.turno || 'Diurno'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm font-bold text-white">{p.calculatedHours}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculationHours}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400">{p.diariasCompletas}</td>
+                  <td className="px-6 py-4 text-sm text-blue-400">{p.extraHours || '00:00'}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</td>
                 </tr>
               ))}
               {reportData.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-slate-500 italic">Nenhum registro encontrado para os filtros selecionados.</td>
+                  <td colSpan={9} className="px-6 py-12 text-center text-slate-500 italic">Nenhum registro encontrado para os filtros selecionados.</td>
                 </tr>
               )}
             </tbody>
@@ -3482,7 +3685,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</p>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diária: {p.diarias}</p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias: {p.diariasCompletas}</p>
                 </div>
               </div>
 
@@ -3492,20 +3695,20 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               </div>
 
               <div className="flex justify-between items-center bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Entrada</p>
-                    <p className="text-sm font-bold text-white">{p.entrada1 || '--:--'}</p>
-                  </div>
-                  <div className="w-4 border-t border-slate-600"></div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Saída</p>
-                    <p className="text-sm font-bold text-white">{p.saida2 || p.saida1 || '--:--'}</p>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                    {p.turno || 'Diurno'}
+                  </span>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Horas</p>
-                  <p className="text-sm font-bold text-orange-500">{p.calculatedHours}</p>
+                <div className="text-right flex gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Calc.</p>
+                    <p className="text-xs font-black text-orange-500">{p.calculationHours}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Extra</p>
+                    <p className="text-xs font-black text-blue-400">{p.extraHours || '00:00'}</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3599,6 +3802,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[], onRefresh: () => void }) {
   const [point, setPoint] = useState<PointRecord | null>(null);
   const [selectedWorkId, setSelectedWorkId] = useState<string | ''>('');
+  const [selectedShift, setSelectedShift] = useState<ShiftType>(ShiftType.DIURNO);
   const [loading, setLoading] = useState(false);
   const [obs, setObs] = useState('');
   const [status, setStatus] = useState<'idle' | 'locating' | 'refining' | 'saving'>('idle');
@@ -3615,6 +3819,11 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setPoint(todayPoint || null);
     if (todayPoint?.work_id) {
       setSelectedWorkId(String(todayPoint.work_id));
+    }
+    if (point?.tipo_turno && !point.entrada1) {
+      setSelectedShift(point.tipo_turno);
+    } else if (point?.tipo_turno) {
+      setSelectedShift(point.tipo_turno);
     }
   }, [user.id]);
 
@@ -3723,7 +3932,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
           obs: '',
           total_hours: '00:00',
-          status: WorkStatus.TRABALHANDO
+          status: WorkStatus.TRABALHANDO,
+          tipo_turno: selectedShift
         };
         allPoints.push(point);
       }
@@ -3732,9 +3942,15 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       const lat = pos ? pos.coords.latitude : 0;
       const lng = pos ? pos.coords.longitude : 0;
       const acc = pos ? pos.coords.accuracy : 0;
-      // const timestampLocalizacao = pos ? pos.timestamp : Date.now();
+      
+      if (point) {
+        point.tipo_turno = selectedShift;
+      }
 
       if (type === 'entrada1') {
+        const autoShift = getAutomaticShift(horaLocal);
+        point.tipo_turno = autoShift;
+        setSelectedShift(autoShift);
         point.entrada1 = horaLocal;
         point.entrada1_lat = lat; point.entrada1_lng = lng; point.entrada1_acc = acc; point.entrada1_address = address;
         point.work_id = String(selectedWorkId);
@@ -3880,21 +4096,41 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
         {nextAction && (
           <div className="space-y-6">
-            {(nextAction === 'entrada1' || nextAction === 'entrada2') && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(nextAction === 'entrada1' || nextAction === 'entrada2') && (
+                <div className="space-y-1.5 text-left">
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Selecionar Obra</label>
+                  <select 
+                    value={selectedWorkId} 
+                    onChange={e => setSelectedWorkId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
+                  >
+                    <option value="">Selecione uma obra...</option>
+                    {works.map(w => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
               <div className="space-y-1.5 text-left">
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Selecionar Obra</label>
-                <select 
-                  value={selectedWorkId} 
-                  onChange={e => setSelectedWorkId(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
-                >
-                  <option value="">Selecione uma obra...</option>
-                  {works.map(w => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
-                  ))}
-                </select>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
+                <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1.5 rounded-xl border border-slate-700">
+                  <button
+                    onClick={() => setSelectedShift(ShiftType.DIURNO)}
+                    className={`py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${selectedShift === ShiftType.DIURNO ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Diurno
+                  </button>
+                  <button
+                    onClick={() => setSelectedShift(ShiftType.NOTURNO)}
+                    className={`py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${selectedShift === ShiftType.NOTURNO ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Noturno
+                  </button>
+                </div>
               </div>
-            )}
+            </div>
 
             {(nextAction === 'saida1' || nextAction === 'saida2') && point?.work_name && (
               <div className="flex items-center justify-center gap-2 py-2 px-4 bg-slate-900 rounded-xl border border-slate-800">
