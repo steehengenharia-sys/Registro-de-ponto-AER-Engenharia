@@ -207,15 +207,30 @@ function calcularPeriodo(inicio: string, fim: string): number {
   const [h1, m1] = inicio.split(':').map(Number);
   const [h2, m2] = fim.split(':').map(Number);
   if (isNaN(h1) || isNaN(m1) || isNaN(h2) || isNaN(m2)) return 0;
-  let diff = (h2 * 60 + m2) - (h1 * 60 + m1);
+  
+  // Cálculo em minutos (Regra Principal)
+  const totalMinutosEntrada = (h1 * 60) + m1;
+  const totalMinutosSaida = (h2 * 60) + m2;
+  
+  let diff = totalMinutosSaida - totalMinutosEntrada;
+  
+  // Se cruzar meia-noite (saida < entrada)
   if (diff < 0) diff += 24 * 60;
+  
   return diff;
 }
 
 function formatarMinutos(totalMinutos: number): string {
+  // Horas formatadas HH:MM
   const h = Math.floor(totalMinutos / 60);
   const m = totalMinutos % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function formatCurrency(valor: number): string {
+  // Padrão brasileiro: R$ X.XXX,XX
+  const valorArredondado = Math.round(valor * 100) / 100;
+  return 'R$ ' + valorArredondado.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function calcularHoras(entrada1: string, saida1: string, entrada2: string, saida2: string): string {
@@ -235,90 +250,838 @@ function somarHoras(listaDeHoras: string[]): string {
   return formatarMinutos(totalMinutos);
 }
 
-function calcularHorasRecord(p: Partial<PointRecord>): string {
-  const metrics = calculateRecordMetrics(p);
-  return metrics.workedHours;
-}
-
 const MINUTES_PER_DIARIA = 540; // 9h
-
-function getAutomaticShift(time: string): ShiftType {
-  if (!time || !time.includes(':')) return ShiftType.DIURNO;
-  const [h] = time.split(':').map(Number);
-  // Se entrada >= 06:00 e < 18:00 → DIURNO, Se entrada >= 18:00 ou < 06:00 → NOTURNO
-  if (h >= 6 && h < 18) return ShiftType.DIURNO;
-  return ShiftType.NOTURNO;
-}
 
 function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0) {
   const p1 = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
   const p2 = calcularPeriodo(p.entrada2 || '', p.saida2 || '');
-  const workedMinutes = p1 + p2;
+  const totalMinutos = p1 + p2;
   
-  // Turno: Se não houver, usa o automático baseado na entrada1 ou default
-  let shift = p.tipo_turno;
-  if (!shift && p.entrada1) {
-    shift = getAutomaticShift(p.entrada1);
-  }
-  shift = shift || ShiftType.DIURNO;
+  const baseDiaria = valorDiaria || 180;
   
-  // Ajuste (+1h para Diurno) - Pode ser desabilitado manualmente se p.apply_adjustment for false
-  const hasAdjustment = shift === ShiftType.DIURNO && p.apply_adjustment !== false;
-  
-  let calculationMinutes = workedMinutes;
-  if (hasAdjustment) {
-    calculationMinutes += 60;
-  }
-  
-  const calculationHours = calculationMinutes / 60;
-  let valorTotal = 0;
-  let diariasCompletas = 0;
-  let extraHoursMinutes = 0;
-  
-  // REGRA HÍBRIDA:
-  if (calculationHours < 9) {
-    // SE horas_calculo < 9: valor = horas_calculo × 20, diarias = 0
-    valorTotal = calculationHours * 20;
-    diariasCompletas = 0;
-  } else if (calculationHours <= 12) {
-    // SE horas_calculo >= 9 E <= 12: valor = 180, diarias = 1
-    valorTotal = 180;
-    diariasCompletas = 1;
-  } else {
-    // SE horas_calculo > 12: valor = 180 + ((horas_calculo - 9) × 20)
-    extraHoursMinutes = (calculationHours - 9) * 60;
-    valorTotal = 180 + (extraHoursMinutes / 60 * 20);
-    diariasCompletas = 1;
-  }
-
-  // Se valorDiaria for diferente de 180 (ex: 200), ajustamos proporcionalmente
-  // Mas a regra diz fixo 180/9=20. Vamos respeitar o valor da diária do usuário se existir.
-  const valorDiariaEfetivo = valorDiaria || 180;
-  if (valorDiariaEfetivo !== 180) {
-    const hourlyRate = valorDiariaEfetivo / 9;
-    if (calculationHours < 9) {
-      valorTotal = calculationHours * hourlyRate;
-    } else if (calculationHours <= 12) {
-      valorTotal = valorDiariaEfetivo;
-    } else {
-      valorTotal = valorDiariaEfetivo + ((calculationHours - 9) * hourlyRate);
-    }
-  }
+  const valorTotal = Math.round(((totalMinutos / MINUTES_PER_DIARIA) * baseDiaria) * 100) / 100;
+  const diariasEquivalentes = totalMinutos / MINUTES_PER_DIARIA;
 
   return {
-    shift,
-    workedMinutes,
-    workedHours: formatarMinutos(workedMinutes),
-    calculationMinutes,
-    calculationHours: formatarMinutos(calculationMinutes),
-    diariasCompletas,
-    extraHoursMinutes,
-    extraHours: calculationHours > 9 ? formatarMinutos(Math.round(extraHoursMinutes)) : '00:00',
+    workedMinutes: totalMinutos,
+    workedHours: formatarMinutos(totalMinutos),
     totalValue: valorTotal,
-    hasAdjustment,
-    diariasEquivalentes: calculationMinutes / MINUTES_PER_DIARIA
+    diariasEquivalentes
   };
 }
+
+function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserData[], works: Work[], overrideDiaria?: number, globalDiariaValueStr?: string, mode: 'auto' | 'diaria' | 'manual' = 'auto') {
+  const intervals: any[] = [];
+  
+  pointsToExtract.forEach(p => {
+    const user = users.find(u => String(u.id) === String(p.user_id));
+    const baseDiaria = overrideDiaria || user?.valor_diaria || (globalDiariaValueStr ? parseFloat(globalDiariaValueStr) : 180) || 180;
+    const userName = p.user_name || user?.name || '-';
+    
+    // Intervalo 1
+    const p1Mins = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
+    if (p.entrada1 && p1Mins > 0) {
+      const valorTotal = (p1Mins / MINUTES_PER_DIARIA) * baseDiaria;
+
+      let w1Id = p.entrada1_obra || p.work_name || p.work_id;
+      let w1Name = '-';
+      if (w1Id) {
+         const searchId = String(w1Id).trim().toLowerCase();
+         const wInfo1 = works.find(w => String(w.id).trim().toLowerCase() === searchId || w.name.trim().toLowerCase() === searchId);
+         w1Name = wInfo1 ? wInfo1.name.trim() : String(w1Id).trim();
+      }
+
+      intervals.push({
+        origPoint: p,
+        date: p.date,
+        userId: p.user_id,
+        userName,
+        workName: w1Name,
+        entrada: p.entrada1,
+        saida: p.saida1,
+        workedMinutes: p1Mins,
+        workedHoursStr: formatarMinutos(p1Mins),
+        diarias: p1Mins / MINUTES_PER_DIARIA,
+        valorTotal
+      });
+    }
+
+    // Intervalo 2
+    const p2Mins = calcularPeriodo(p.entrada2 || '', p.saida2 || '');
+    if (p.entrada2 && p2Mins > 0) {
+      const valorTotal = (p2Mins / MINUTES_PER_DIARIA) * baseDiaria;
+
+      let w2Id = p.entrada2_obra || p.entrada1_obra || p.work_name || p.work_id; 
+      let w2Name = '-';
+      if (w2Id) {
+         const searchId2 = String(w2Id).trim().toLowerCase();
+         const wInfo2 = works.find(w => String(w.id).trim().toLowerCase() === searchId2 || w.name.trim().toLowerCase() === searchId2);
+         w2Name = wInfo2 ? wInfo2.name.trim() : String(w2Id).trim();
+      }
+
+      intervals.push({
+        origPoint: p,
+        date: p.date,
+        userId: p.user_id,
+        userName,
+        workName: w2Name,
+        entrada: p.entrada2,
+        saida: p.saida2,
+        workedMinutes: p2Mins,
+        workedHoursStr: formatarMinutos(p2Mins),
+        diarias: p2Mins / MINUTES_PER_DIARIA,
+        valorTotal
+      });
+    }
+  });
+
+  intervals.sort((a, b) => a.date.localeCompare(b.date));
+  return intervals;
+}
+
+function generateOfficialReportPDF(
+  finalData: any[], 
+  totalCostToDisplay: number, 
+  filters: any, 
+  users: UserData[], 
+  works: Work[], 
+  calcMode: 'auto' | 'diaria' | 'manual',
+  globalDiaria: number
+) {
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const marginLeft = 15;
+    const pageWidth = 210;
+    let currentY = 15;
+    
+    const subMinsTotal = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
+    const subHoursTotal = formatarMinutos(subMinsTotal);
+    const subDiariasTotal = subMinsTotal / MINUTES_PER_DIARIA;
+    const subEmployeesTotal = new Set(finalData.map((p: any) => String(p.userId))).size;
+    const calculationModeText = calcMode === 'auto' ? 'Automático (por horas)' : calcMode === 'diaria' ? 'Diárias Inteiras' : 'Manual';
+
+    const colorBlue: [number, number, number] = [30, 58, 95];
+    const colorOrange: [number, number, number] = [234, 88, 12];
+    const colorSlate: [number, number, number] = [100, 116, 139];
+
+    // --- 1. HEADER (3 COLUMNS) ---
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, 12, 12, 1.5, 1.5, 'F');
+    // Accent line
+    doc.setFillColor(...colorOrange);
+    doc.rect(marginLeft + 2.5, currentY + 10, 7, 0.8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.text('A&R', marginLeft + 6, currentY + 7.5, { align: 'center' });
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(12);
+    doc.text('A&R ENGENHARIA', marginLeft + 16, currentY + 4);
+    doc.setFontSize(6);
+    doc.setFont("helvetica", "normal");
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 16, currentY + 8);
+
+    currentY += 14;
+    doc.setTextColor(...colorBlue);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text('RELATÓRIO GERENCIAL', pageWidth / 2, currentY, { align: 'center' });
+
+    // Header Meta
+    doc.setFontSize(7);
+    doc.setTextColor(...colorSlate);
+    doc.setFont("helvetica", "normal");
+    const now = new Date();
+    doc.text(`Gerado em:`, pageWidth - marginLeft, currentY - 2, { align: 'right' });
+    doc.setFont("helvetica", "bold");
+    doc.text(`${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageWidth - marginLeft, currentY + 1.5, { align: 'right' });
+
+    currentY += 10;
+    // Section line
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
+    
+    currentY += 10;
+
+    // --- 2. INFO BAR (4 Columns) ---
+    const employeeName = filters.userId ? users.find(u => String(u.id) === String(filters.userId))?.name || '---' : 'Todos';
+    const periodoStr = `${filters.startDate ? new Date(filters.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Início'} até ${filters.endDate ? new Date(filters.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Fim'}`;
+    const selWorkName = filters.workId ? works.find(w => String(w.id) === String(filters.workId))?.name || '---' : 'Todas';
+
+    const totalW = pageWidth - (marginLeft * 2);
+    const colWidths = [totalW * 0.20, totalW * 0.30, totalW * 0.20, totalW * 0.30];
+    
+    const drawInfo = (colIndex: number, label: string, val: string, subVal?: string) => {
+      let x = marginLeft;
+      for(let i=0; i<colIndex; i++) x += colWidths[i];
+      const w = colWidths[colIndex];
+
+      doc.setFontSize(7);
+      doc.setTextColor(...colorSlate);
+      doc.setFont("helvetica", "bold");
+      doc.text(label, x + w / 2, currentY, { align: 'center' });
+      
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      const splitVal = doc.splitTextToSize(val, w - 4);
+      doc.text(splitVal, x + w / 2, currentY + 5, { align: 'center' });
+      
+      if (subVal) {
+        doc.setFontSize(6.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...colorSlate);
+        doc.text(subVal, x + w / 2, currentY + 9, { align: 'center' });
+      }
+    };
+
+    drawInfo(0, 'FUNCIONÁRIO', employeeName.toUpperCase());
+    drawInfo(1, 'PERÍODO', periodoStr);
+    drawInfo(2, 'OBRA', selWorkName.toUpperCase());
+    const subCalcTextText = calcMode !== 'manual' ? `Diária base: R$ ${globalDiaria.toFixed(2)}` : '';
+    drawInfo(3, 'CÁLCULO', calculationModeText, subCalcTextText);
+
+    currentY += 18;
+
+    // --- 3. SUMMARY CARDS ---
+    const gridSpacing = 4;
+    const cardW = (pageWidth - (marginLeft * 2) - (gridSpacing * 3)) / 4;
+
+    const drawCard = (x: number, label: string, val: string, isHours = false, isCost = false) => {
+      doc.setDrawColor(226, 232, 240);
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(x, currentY, cardW, 20, 1, 1, 'FD');
+      
+      doc.setFontSize(7);
+      doc.setTextColor(...colorSlate);
+      doc.setFont("helvetica", "bold");
+      doc.text(label, x + (cardW / 2), currentY + 6, { align: 'center' });
+      
+      if (isHours) {
+        doc.setFontSize(16);
+        doc.setTextColor(15, 23, 42); 
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.4);
+        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
+      } else if (isCost) {
+        doc.setFontSize(13);
+        doc.setTextColor(...colorOrange);
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(...colorOrange);
+        doc.setLineWidth(0.4);
+        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
+      } else {
+        doc.setFontSize(10.5);
+        doc.setTextColor(51, 65, 85);
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.3);
+        doc.line(x + 8, currentY + 16, x + cardW - 8, currentY + 16);
+      }
+      doc.text(val, x + (cardW / 2), currentY + 14, { align: 'center' });
+    };
+
+    drawCard(marginLeft, 'TOTAL DE HORAS', subHoursTotal, true);
+    drawCard(marginLeft + (cardW + gridSpacing), 'TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
+    drawCard(marginLeft + (cardW + gridSpacing) * 2, 'FUNCIONÁRIOS', subEmployeesTotal.toString());
+    drawCard(marginLeft + (cardW + gridSpacing) * 3, 'CUSTO TOTAL', formatCurrency(totalCostToDisplay), false, true);
+
+    currentY += 26;
+
+    // --- 4. SUMMARY BY WORK TABLE ---
+    doc.setFontSize(11);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('RESUMO POR OBRA', marginLeft, currentY);
+    currentY += 2.5;
+
+    const workSummaryMap = new Map();
+    finalData.forEach(p => {
+      const canonical = String(p.workName || 'Extra/Outros').trim().toUpperCase();
+      if (!workSummaryMap.has(canonical)) {
+        workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, cost: 0 });
+      }
+      const w = workSummaryMap.get(canonical);
+      w.workers.add(p.userId);
+      w.mins += p.workedMinutes;
+      w.cost += p.valorTotal;
+    });
+
+    const workSummaryRows = Array.from(workSummaryMap.values());
+
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: marginLeft, right: marginLeft },
+      head: [['OBRA', 'FUNCIONÁRIOS', 'HORAS', 'DIÁRIAS', 'CUSTO TOTAL']],
+      body: [
+        ...workSummaryRows.map(w => [
+          w.name,
+          w.workers.size.toString(),
+          formatarMinutos(w.mins),
+          (w.mins / MINUTES_PER_DIARIA).toFixed(2),
+          formatCurrency(w.cost)
+        ]),
+        ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 9.5, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.5 },
+      alternateRowStyles: { fillColor: [250, 250, 252] },
+      columnStyles: { 
+        0: { halign: 'left', cellWidth: 'auto' }, 
+        1: { halign: 'center' }, 
+        2: { halign: 'center' }, 
+        3: { halign: 'center' }, 
+        4: { halign: 'right', fontStyle: 'bold' } 
+      },
+      didParseCell: (data) => {
+        if (data.row.index === workSummaryRows.length) {
+          data.cell.styles.fillColor = [241, 245, 249];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [30, 41, 59];
+        }
+      }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 8;
+
+    // --- 5. DETALHAMENTO GERAL ---
+    doc.setFontSize(11);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('DETALHAMENTO GERAL', marginLeft, currentY);
+    currentY += 3;
+
+    // Sort finalData by date then entrance time
+    const sortedData = [...finalData].sort((a, b) => {
+      const dateA = a.date;
+      const dateB = b.date;
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      return (a.entrada || '').localeCompare(b.entrada || '');
+    });
+
+    // Estimate table height to avoid breaks
+    const bodyRowHeight = 4.5; 
+    const headHeight = 5.5;
+    const tableHeight = headHeight + (sortedData.length * bodyRowHeight);
+    const pageBottom = 280;
+    const availableSpace = pageBottom - currentY;
+
+    if (tableHeight > availableSpace && tableHeight < (pageBottom - 20)) {
+        doc.addPage();
+        currentY = 20;
+        doc.setFontSize(10);
+        doc.setTextColor(...colorBlue);
+        doc.setFont("helvetica", "bold");
+        doc.text('DETALHAMENTO GERAL', marginLeft, currentY);
+        currentY += 6;
+    }
+
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: marginLeft, right: marginLeft },
+      head: [['DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
+      body: sortedData.map(p => [
+        new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+        p.workName || '---',
+        `${p.entrada || '--:--'} às ${p.saida || '--:--'}`,
+        p.workedHoursStr,
+        formatCurrency(p.valorTotal)
+      ]),
+      foot: [['TOTAL GERAL', '', '', subHoursTotal, formatCurrency(totalCostToDisplay)]],
+      theme: 'striped',
+      headStyles: { fillColor: [51, 65, 85], fontSize: 9.5, halign: 'center', cellPadding: 1.2 },
+      bodyStyles: { fontSize: 8.5, halign: 'center', cellPadding: 1.4 },
+      footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontSize: 9.5, fontStyle: 'bold', halign: 'center', cellPadding: 1.6 },
+      columnStyles: { 
+        0: { cellWidth: 20 },
+        1: { halign: 'left' },
+        2: { halign: 'center' },
+        3: { halign: 'center' },
+        4: { halign: 'right' } 
+      },
+      didParseCell: (data) => {
+        if (data.section === 'foot') {
+           if (data.column.index === 0) data.cell.styles.halign = 'left';
+           if (data.column.index === 4) data.cell.styles.halign = 'right';
+        }
+      }
+    });
+
+    // FOOTER
+    const totalPages = (doc.internal as any).getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(7);
+        doc.setTextColor(...colorSlate);
+        doc.line(marginLeft, 282, pageWidth - marginLeft, 282);
+        doc.text('Relatório gerado por A&R Engenharia | Sistema de Controle de Ponto', marginLeft, 287);
+        doc.text(`Página ${i} de ${totalPages}`, pageWidth - marginLeft, 287, { align: 'right' });
+    }
+
+    doc.save(`Relatorio_Gerencial_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
+}
+
+function generateReciboPDF(
+  finalData: any[], 
+  totalCostToDisplay: number, 
+  filters: any, 
+  users: UserData[], 
+  globalDiaria: number
+) {
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = 210;
+    const marginLeft = 20;
+    let currentY = 15;
+
+    const subMinsTotal = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
+    const subHoursTotal = formatarMinutos(subMinsTotal);
+    const subDiariasTotal = subMinsTotal / MINUTES_PER_DIARIA;
+    const employeeName = filters.userId ? users.find(u => String(u.id) === String(filters.userId))?.name || '---' : 'Todos';
+    const periodoStr = `${filters.startDate ? new Date(filters.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Início'} até ${filters.endDate ? new Date(filters.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Fim'}`;
+
+    const colorBlue: [number, number, number] = [30, 58, 95];
+    const colorOrange: [number, number, number] = [234, 88, 12];
+    const colorSlate: [number, number, number] = [100, 116, 139];
+
+    // --- 1. HEADER ---
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, 14, 14, 2, 2, 'F');
+    // Accent line
+    doc.setFillColor(...colorOrange);
+    doc.rect(marginLeft + 3, currentY + 12, 8, 1, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text('A&R', marginLeft + 7, currentY + 9, { align: 'center' });
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(16);
+    doc.text('A&R ENGENHARIA', marginLeft + 18, currentY + 6);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 18, currentY + 11);
+
+    currentY += 20;
+    doc.setFontSize(22);
+    doc.setTextColor(...colorOrange);
+    doc.setFont("helvetica", "bold");
+    doc.text('RECIBO DE PAGAMENTO', pageWidth / 2, currentY, { align: 'center' });
+
+    currentY += 10;
+    // Info Block
+    const drawInfo = (label: string, val: string, x: number) => {
+      doc.setFontSize(8);
+      doc.setTextColor(...colorSlate);
+      doc.text(label, x, currentY);
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", "bold");
+      doc.text(val.toUpperCase(), x, currentY + 7);
+    };
+
+    drawInfo('FUNCIONÁRIO', employeeName, marginLeft + 10);
+    currentY += 10;
+    drawInfo('PERÍODO', periodoStr, marginLeft + 10);
+
+    currentY += 8;
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
+    doc.setLineDashPattern([], 0);
+
+    currentY += 10;
+    const drawRow = (label: string, val: string) => {
+      doc.setFontSize(10);
+      doc.setTextColor(71, 85, 105);
+      doc.setFont("helvetica", "normal");
+      doc.text(label, marginLeft + 10, currentY);
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", "bold");
+      doc.text(val, pageWidth - marginLeft - 10, currentY, { align: 'right' });
+      currentY += 8;
+    };
+
+    drawRow('TOTAL DE HORAS', subHoursTotal);
+    drawRow('TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
+    drawRow('VALOR DA DIÁRIA', formatCurrency(globalDiaria));
+
+    // --- RESUMO POR OBRA (MANDATORY) ---
+    currentY += 4;
+    const workSummaryMap = new Map();
+    finalData.forEach(p => {
+       const canonical = String(p.workName || 'Extra/Outros').trim().toUpperCase();
+       if (!workSummaryMap.has(canonical)) {
+          workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
+       }
+       const w = workSummaryMap.get(canonical);
+       w.mins += p.workedMinutes;
+       w.cost += p.valorTotal;
+    });
+
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: marginLeft + 5, right: marginLeft + 5 },
+      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'VALOR']],
+      body: Array.from(workSummaryMap.values()).map(w => [
+        w.name,
+        formatarMinutos(w.mins),
+        (w.mins / MINUTES_PER_DIARIA).toFixed(2),
+        formatCurrency(w.cost)
+      ]),
+      theme: 'grid',
+      headStyles: { fillColor: [51, 65, 85], fontSize: 8, halign: 'center' },
+      bodyStyles: { fontSize: 7, halign: 'center' },
+      alternateRowStyles: { fillColor: [250, 250, 250] },
+      columnStyles: { 
+        0: { halign: 'left' }, 
+        1: { halign: 'center' },
+        2: { halign: 'center' },
+        3: { halign: 'right', fontStyle: 'bold' } 
+      }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 6;
+
+    // --- DETALHAMENTO DE HORAS ---
+    doc.setFontSize(9);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('DETALHAMENTO DE HORAS', marginLeft + 5, currentY);
+    currentY += 4;
+
+    const sortedData = [...finalData].sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return (a.entrada || '').localeCompare(b.entrada || '');
+    });
+
+    // Height check
+    const bodyRowHeight = 4.5;
+    const headHeight = 5.5;
+    const tableHeight = headHeight + (sortedData.length * bodyRowHeight);
+    const pageBottomLimit = 275;
+    const availSpace = pageBottomLimit - currentY;
+
+    if (tableHeight > availSpace && tableHeight < (pageBottomLimit - 25)) {
+        doc.addPage();
+        currentY = 20;
+        doc.setFontSize(9);
+        doc.setTextColor(...colorBlue);
+        doc.setFont("helvetica", "bold");
+        doc.text('DETALHAMENTO DE HORAS', marginLeft + 5, currentY);
+        currentY += 5;
+    }
+
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: marginLeft + 5, right: marginLeft + 5 },
+      head: [['DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
+      body: sortedData.map(p => [
+        new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+        p.workName || '---',
+        `${p.entrada || '--:--'} às ${p.saida || '--:--'}`,
+        p.workedHoursStr,
+        formatCurrency(p.valorTotal)
+      ]),
+      theme: 'grid',
+      headStyles: { fillColor: [71, 85, 105], fontSize: 7, halign: 'center', cellPadding: 1.2 },
+      bodyStyles: { fontSize: sortedData.length > 35 ? 6 : 7, halign: 'center', cellPadding: 1.5 },
+      alternateRowStyles: { fillColor: [252, 252, 253] },
+      columnStyles: { 
+        0: { halign: 'center' },
+        1: { halign: 'left' },
+        2: { halign: 'center' },
+        3: { halign: 'center' },
+        4: { halign: 'right', fontStyle: 'bold' } 
+      }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 10;
+
+    // TOTAL BOX
+    if (currentY > 220) { doc.addPage(); currentY = 20; }
+    doc.setFillColor(234, 88, 12, 0.05);
+    doc.setDrawColor(...colorOrange);
+    doc.roundedRect(marginLeft + 15, currentY, pageWidth - (marginLeft * 2) - 30, 35, 3, 3, 'FD');
+    doc.setFontSize(12);
+    doc.setTextColor(...colorOrange);
+    doc.text('TOTAL A PAGAR', pageWidth / 2, currentY + 10, { align: 'center' });
+    doc.setFontSize(28);
+    doc.setFont("helvetica", "bold");
+    doc.text(formatCurrency(totalCostToDisplay), pageWidth / 2, currentY + 25, { align: 'center' });
+
+    currentY += 50;
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    doc.setFont("helvetica", "normal");
+    const declaration = "Declaro que recebi o valor acima discriminado, referente às horas trabalhadas no período especificado.";
+    const splitDec = doc.splitTextToSize(declaration, pageWidth - (marginLeft * 2) - 20);
+    doc.text(splitDec, pageWidth / 2, currentY, { align: 'center' });
+
+    currentY += 35;
+    doc.setDrawColor(30, 41, 59);
+    doc.line(pageWidth / 4, currentY, (pageWidth / 4) * 3, currentY);
+    doc.setFontSize(8);
+    doc.text('ASSINATURA DO FUNCIONÁRIO', pageWidth / 2, currentY + 5, { align: 'center' });
+
+    currentY += 15;
+    doc.text(`DATA: ________ / ________ / ________`, pageWidth / 2, currentY, { align: 'center' });
+
+    // FOOTER (Multi-page)
+    const totalPgs = (doc.internal as any).getNumberOfPages();
+    for (let i = 1; i <= totalPgs; i++) {
+        doc.setPage(i);
+        doc.setFontSize(7);
+        doc.setTextColor(...colorSlate);
+        doc.text(`Relatório gerado por A&R Engenharia | Sistema de Controle de Ponto`, marginLeft, 287);
+        doc.text(`Página ${i} de ${totalPgs}`, pageWidth - marginLeft, 287, { align: 'right' });
+    }
+    
+    doc.save(`Recibo_${employeeName.replace(/\s/g, '_')}_${new Date().getTime()}.pdf`);
+}
+
+
+function generateFechamentoPDF(
+  finalData: any[], 
+  totalCostToDisplay: number, 
+  filters: any, 
+  users: UserData[], 
+  works: Work[],
+  globalDiaria: number
+) {
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const marginLeft = 15;
+    const pageWidth = 210;
+    let currentY = 15;
+    
+    const colorBlue: [number, number, number] = [30, 58, 95];
+    const colorOrange: [number, number, number] = [234, 88, 12];
+    const colorSlate: [number, number, number] = [100, 116, 139];
+    const colorGreen: [number, number, number] = [22, 163, 74];
+
+    const subMinsTotal = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
+    const subHoursTotal = formatarMinutos(subMinsTotal);
+    const subDiariasTotal = subMinsTotal / MINUTES_PER_DIARIA;
+
+    const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const d = filters.startDate ? new Date(filters.startDate + 'T00:00:00') : new Date();
+    const periodText = `${monthNames[d.getMonth()]}/${d.getFullYear()}`;
+
+    // HEADER
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, 12, 12, 1.5, 1.5, 'F');
+    // Accent line
+    doc.setFillColor(...colorOrange);
+    doc.rect(marginLeft + 2.5, currentY + 10, 7, 0.8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.text('A&R', marginLeft + 6, currentY + 7.5, { align: 'center' });
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(14);
+    doc.text('A&R ENGENHARIA', marginLeft + 16, currentY + 5);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 16, currentY + 10);
+    
+    doc.setFontSize(16);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('FECHAMENTO MENSAL', pageWidth / 2, currentY + 16, { align: 'center' });
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Período: ${periodText}`, pageWidth / 2, currentY + 23, { align: 'center' });
+
+    currentY += 28;
+    // Section line
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
+    currentY += 8;
+
+    // --- 1. CARDS SUMMARY ---
+    const gridSpacing = 4;
+    const cardW = (pageWidth - (marginLeft * 2) - (gridSpacing * 2)) / 3;
+    const drawSummaryCard = (x: number, label: string, val: string, isHours = false, isGreen = false) => {
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(x, currentY, cardW, 20, 1, 1, 'FD');
+      
+      doc.setFontSize(7);
+      doc.setTextColor(...colorSlate);
+      doc.setFont("helvetica", "bold");
+      doc.text(label, x + cardW / 2, currentY + 7, { align: 'center' });
+      
+      if (isHours) {
+        doc.setFontSize(16);
+        doc.setTextColor(15, 23, 42);
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.4);
+        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
+      } else if (isGreen) {
+        doc.setFontSize(14);
+        doc.setTextColor(...colorGreen);
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(...colorGreen);
+        doc.setLineWidth(0.4);
+        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
+      } else {
+        doc.setFontSize(11);
+        doc.setTextColor(51, 65, 85);
+        doc.setFont("helvetica", "bold");
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.3);
+        doc.line(x + 8, currentY + 16, x + cardW - 8, currentY + 16);
+      }
+      doc.text(val, x + cardW / 2, currentY + 14, { align: 'center' });
+    };
+
+    drawSummaryCard(marginLeft, 'TOTAL DE HORAS', subHoursTotal, true);
+    drawSummaryCard(marginLeft + cardW + gridSpacing, 'TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
+    drawSummaryCard(marginLeft + (cardW + gridSpacing) * 2, 'TOTAL GERAL', formatCurrency(totalCostToDisplay), false, true);
+
+    currentY += 30;
+
+    // --- 2. SUMMARY BY EMPLOYEE ---
+    doc.setFontSize(11);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('RESUMO POR FUNCIONÁRIO', marginLeft, currentY);
+    
+    const userSummaryMap = new Map();
+    finalData.forEach(p => {
+       if(!userSummaryMap.has(p.userId)) {
+          userSummaryMap.set(p.userId, { name: p.userName || '---', mins: 0, cost: 0 });
+       }
+       const u = userSummaryMap.get(p.userId);
+       u.mins += p.workedMinutes;
+       u.cost += p.valorTotal;
+    });
+
+    autoTable(doc, {
+      startY: currentY + 3,
+      margin: { left: marginLeft, right: marginLeft },
+      head: [['FUNCIONÁRIO', 'HORAS', 'DIÁRIAS', 'TOTAL']],
+      body: Array.from(userSummaryMap.values()).map(u => [
+         u.name,
+         formatarMinutos(u.mins),
+         (u.mins / MINUTES_PER_DIARIA).toFixed(2),
+         formatCurrency(u.cost)
+      ]),
+      theme: 'grid',
+      headStyles: { fillColor: colorBlue, fontSize: 9.5, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.5 },
+      alternateRowStyles: { fillColor: [252, 252, 254] },
+      columnStyles: { 
+        0: { halign: 'left' },
+        1: { halign: 'center' },
+        2: { halign: 'center' },
+        3: { halign: 'right', fontStyle: 'bold' } 
+      }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 8;
+
+    // --- 3. SUMMARY BY WORK ---
+    doc.setFontSize(11);
+    doc.setTextColor(...colorBlue);
+    doc.setFont("helvetica", "bold");
+    doc.text('RESUMO POR OBRA', marginLeft, currentY);
+    
+    const workSummaryMap = new Map();
+    finalData.forEach(p => {
+       const canonical = String(p.workName || 'EXTRA/OUTROS').trim().toUpperCase();
+       if (!workSummaryMap.has(canonical)) {
+          workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
+       }
+       const w = workSummaryMap.get(canonical);
+       w.mins += p.workedMinutes;
+       w.cost += p.valorTotal;
+    });
+
+    autoTable(doc, {
+      startY: currentY + 4,
+      margin: { left: marginLeft, right: marginLeft },
+      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'TOTAL']],
+      body: Array.from(workSummaryMap.values()).map(w => [
+         w.name,
+         formatarMinutos(w.mins),
+         (w.mins / MINUTES_PER_DIARIA).toFixed(2),
+         formatCurrency(w.cost)
+      ]),
+      theme: 'grid',
+      headStyles: { fillColor: [51, 65, 85], fontSize: 9.5, halign: 'center', cellPadding: 1.2 },
+      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.4 },
+      alternateRowStyles: { fillColor: [252, 252, 254] },
+      columnStyles: { 
+        0: { halign: 'left' },
+        1: { halign: 'center' },
+        2: { halign: 'center' },
+        3: { halign: 'right', fontStyle: 'bold' } 
+      }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 20;
+
+    // --- 4. FINANCIAL SUMMARY BLOCK ---
+    if(currentY > 220) {
+      doc.addPage();
+      currentY = 20;
+    }
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(pageWidth / 2 - 10, currentY, pageWidth / 2 - marginLeft + 10, 38, 2, 2, 'FD');
+    
+    // Icon circle decoration
+    doc.setFillColor(22, 163, 74, 0.1);
+    doc.setDrawColor(22, 163, 74);
+    doc.circle(pageWidth / 2 + 10, currentY + 19, 8, 'FD');
+    doc.setTextColor(22, 163, 74);
+    doc.setFontSize(10);
+    doc.text('$', pageWidth / 2 + 10, currentY + 22, { align: 'center' });
+
+    const finX = pageWidth / 2 + 25;
+    const finValX = pageWidth - marginLeft - 6;
+    
+    doc.setFontSize(8);
+    doc.setTextColor(...colorSlate);
+    doc.setFont("helvetica", "bold");
+    doc.text('RESUMO FINANCEIRO', finX, currentY + 6);
+    
+    const drawFinRow = (y: number, label: string, val: string, isBig = false) => {
+       doc.setFontSize(isBig ? 12 : 9);
+       doc.setTextColor(30, 41, 59);
+       doc.setFont("helvetica", "normal");
+       doc.text(label, finX, y);
+       doc.setFont("helvetica", "bold");
+       if(isBig) doc.setTextColor(22, 163, 74);
+       doc.text(val, finValX, y, { align: 'right' });
+    };
+
+    drawFinRow(currentY + 14, 'Valor da diária base:', formatCurrency(globalDiaria));
+    drawFinRow(currentY + 22, 'Total de diárias:', subDiariasTotal.toFixed(2));
+    drawFinRow(currentY + 33, 'Total geral a pagar:', formatCurrency(totalCostToDisplay), true);
+
+    // FOOTER
+    const totalPg = (doc.internal as any).getNumberOfPages();
+    for (let i = 1; i <= totalPg; i++) {
+        doc.setPage(i);
+        doc.setFontSize(6);
+        doc.setTextColor(...colorSlate);
+        doc.text(`A&R Engenharia | Fechamento Mensal | Gerado em ${new Date().toLocaleDateString('pt-BR')}`, marginLeft, 287);
+        doc.text(`Página ${i} de ${totalPg}`, pageWidth - marginLeft, 287, { align: 'right' });
+    }
+
+    doc.save(`Fechamento_${periodText.replace('/', '_')}.pdf`);
+}
+
 
 enum OperationType {
   CREATE = 'create',
@@ -402,11 +1165,6 @@ enum WorkStatus {
   ENCERRADO = 'Encerrado'
 }
 
-enum ShiftType {
-  DIURNO = 'Diurno',
-  NOTURNO = 'Noturno'
-}
-
 interface PointRecord {
   id: string | number;
   user_id: string;
@@ -436,17 +1194,6 @@ interface PointRecord {
   encerrado?: number;
   last_timestamp?: number;
   status: WorkStatus;
-  tipo_turno?: ShiftType;
-  worked_hours?: string;
-  diarias_completas?: number;
-  minutos_restantes?: number;
-  horas_restantes?: string;
-  calculation_minutes?: number;
-  calculation_hours?: string;
-  extra_hours?: string;
-  apply_adjustment?: boolean;
-  value_total?: number;
-  diarias_equivalentes?: number;
 }
 
 // --- Status Management Functions ---
@@ -742,7 +1489,7 @@ export default function App() {
         // Recalculate total_hours for all points to ensure consistency
         const updatedPoints: PointRecord[] = [];
         const recalculated = pData.map(p => {
-          const newTotal = calcularHorasRecord(p);
+          const newTotal = calculateRecordMetrics(p).workedHours;
           // Use string comparison for changes
           if (newTotal !== p.total_hours) {
             const updatedPoint = { ...p, total_hours: newTotal };
@@ -1348,7 +2095,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                       <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.saida2 || p.saida1 || '--:--'}</td>
                       <td className="px-6 py-4 text-right">
                         <span className="text-sm font-black text-white">
-                          {p.total_hours} h
+                          {p.total_hours}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -1893,10 +2640,6 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
                     {p.total_hours}
                   </span>
                 </div>
-                <div className="flex gap-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias: <span className="text-emerald-500 font-black">{p.diarias_completas || 0}</span></p>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Restante: <span className="text-orange-500 font-black">{p.horas_restantes || '00:00'}</span></p>
-                </div>
               </div>
             </div>
 
@@ -1952,8 +2695,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     saida2: '', 
     entrada1_obra: '', 
     entrada2_obra: '', 
-    obs: '',
-    apply_adjustment: true
+    obs: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
@@ -2149,7 +2891,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             if (times[3] && (!point.saida2 || point.saida2 === '--:--')) { point.saida2 = times[3]; changed = true; }
 
             if (changed) {
-              point.total_hours = calcularHorasRecord(point);
+              point.total_hours = calculateRecordMetrics(point).workedHours;
               point.status = calculateWorkStatus(point);
               if (isNew) {
                 allPoints.push(point);
@@ -2200,8 +2942,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         entrada1_obra: manualFormData.entrada1_obra,
         entrada2_obra: manualFormData.entrada2_obra,
         obs: manualFormData.obs,
-        tipo_turno: manualFormData.tipo_turno || ShiftType.DIURNO,
-        apply_adjustment: manualFormData.apply_adjustment !== false,
         editado_manual: 1,
         total_hours: '00:00',
         status: manualFormData.manual_status || WorkStatus.NAO_INICIADO,
@@ -2213,13 +2953,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
       const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0);
       newPoint.total_hours = metrics.workedHours;
-      newPoint.worked_hours = metrics.workedHours;
-      newPoint.calculation_minutes = metrics.calculationMinutes;
-      newPoint.calculation_hours = metrics.calculationHours;
-      newPoint.diarias_completas = metrics.diariasCompletas;
-      newPoint.extra_hours = metrics.extraHours;
-      newPoint.value_total = metrics.totalValue;
-      newPoint.diarias_equivalentes = metrics.diariasEquivalentes;
 
       allPoints.push(newPoint);
       await storage.savePoints(allPoints);
@@ -2391,16 +3124,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         ...editFormData, 
         editado_manual: 1,
         status: payloadStatus,
-        tipo_turno: metrics.shift,
-        apply_adjustment: editFormData.apply_adjustment !== false,
-        total_hours: metrics.workedHours,
-        worked_hours: metrics.workedHours,
-        calculation_minutes: metrics.calculationMinutes,
-        calculation_hours: metrics.calculationHours,
-        diarias_completas: metrics.diariasCompletas,
-        extra_hours: metrics.extraHours,
-        value_total: metrics.totalValue,
-        diarias_equivalentes: metrics.diariasEquivalentes
+        total_hours: metrics.workedHours
       };
       
       console.log("Enviando para Firestore:", updated);
@@ -2416,25 +3140,24 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     }
   };
 
-  const calculateTotals = (pointsToCalculate: PointRecord[]) => {
+  const calculateTotals = (pointsToCalculate: PointRecord[], overrideDiaria?: number) => {
+    const intervals = extractIntervalsFromPoints(pointsToCalculate, users, works, overrideDiaria, diariaValue, 'auto');
+    
     let totalWorkedMinutes = 0;
     let totalDiariasEq = 0;
     let valorTotal = 0;
     
-    pointsToCalculate.forEach(p => {
-      const user = users.find(u => String(u.id) === String(p.user_id));
-      const valorDiaria = user?.valor_diaria || 180;
-      const metrics = calculateRecordMetrics(p, valorDiaria);
-      
-      totalWorkedMinutes += metrics.workedMinutes;
-      totalDiariasEq += metrics.diariasEquivalentes;
-      valorTotal += metrics.totalValue;
+    intervals.forEach(inv => {
+      totalWorkedMinutes += inv.workedMinutes;
+      totalDiariasEq += inv.diarias;
+      valorTotal += inv.valorTotal;
     });
 
-    const valorDiariaNum = parseFloat(diariaValue) || 180;
+    const valorDiariaNum = overrideDiaria || parseFloat(diariaValue) || 180;
 
     return { 
       totalHoursStr: formatarMinutos(totalWorkedMinutes), 
+      totalHoursDecimal: totalWorkedMinutes / 60,
       totalDiariasEq, 
       valorDiariaNum, 
       valorTotal 
@@ -2442,102 +3165,41 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const generatePDF = () => {
-    const doc = new jsPDF('l', 'mm', 'a4');
-    const { totalHoursStr, totalDiariasEq, valorTotal } = calculateTotals(filteredPoints);
-
-    doc.setFontSize(18);
-    doc.text('A&R Engenharia - Relatório de Ponto', 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Período: ${filters.startDate ? new Date(filters.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Início'} até ${filters.endDate ? new Date(filters.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Fim'}`, 14, 22);
-    
-    const employeeName = filters.userId ? users.find(u => String(u.id) === String(filters.userId))?.name : 'Todos';
-    const workName = filters.workId ? works.find(w => String(w.id) === String(filters.workId))?.name : 'Todas';
-    doc.text(`Funcionário: ${employeeName} | Obra: ${workName}`, 14, 27);
-
-    const tableData = filteredPoints.map(p => {
-      const userObj = users.find(u => String(u.id) === String(p.user_id));
-      const metrics = calculateRecordMetrics(p, userObj?.valor_diaria || 180);
-      
-      return [
-        p.user_name || '-',
-        new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-        p.tipo_turno || 'Diurno',
-        metrics.workedHours,
-        metrics.calculationHours,
-        metrics.diariasCompletas.toString(),
-        metrics.extraHours,
-        `R$ ${metrics.totalValue.toFixed(2)}`
-      ];
-    });
-
-    autoTable(doc, {
-      startY: 32,
-      head: [['Funcionário', 'Data', 'Turno', 'H. Trab.', 'H. Calc.', 'Diárias', 'Extra', 'Valor Total']],
-      body: tableData,
-      theme: 'grid',
-      headStyles: { fillColor: [249, 115, 22] },
-      styles: { fontSize: 8 }
-    });
-
-    const finalY = (doc as any).lastAutoTable.finalY + 10;
-    doc.setFontSize(11);
-    doc.text(`TOTAIS GERAIS:`, 14, finalY);
-    doc.text(`Horas: ${totalHoursStr} | Diárias Eq: ${totalDiariasEq.toFixed(2)} | Valor: R$ ${valorTotal.toFixed(2)}`, 14, finalY + 6);
-
-    doc.save(`Relatorio_Ponto_${new Date().toLocaleDateString()}.pdf`);
-    setIsExportModalOpen(false);
+    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto');
+    const total = intervals.reduce((acc, curr) => acc + curr.valorTotal, 0);
+    const diaria = parseFloat(diariaValue) || 180;
+    generateOfficialReportPDF(intervals, total, filters, users, works, 'auto', diaria);
   };
 
   const generateExcel = () => {
-    const { totalHoursStr, totalDiariasEq, valorTotal } = calculateTotals(filteredPoints);
+    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto');
+    const { totalHoursStr, totalHoursDecimal } = calculateTotals(filteredPoints);
 
-    const data = filteredPoints.map(p => {
-      const userObj = users.find(u => String(u.id) === String(p.user_id));
-      const metrics = calculateRecordMetrics(p, userObj?.valor_diaria || 180);
-
+    const data = intervals.map(inv => {
       return {
-        'Funcionário': p.user_name || '-',
-        'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-        'Turno': p.tipo_turno || 'Diurno',
-        'Horas Trabalhadas': metrics.workedHours,
-        'Horas Cálculo': metrics.calculationHours,
-        'Diárias Completas': metrics.diariasCompletas,
-        'Horas Extras': metrics.extraHours,
-        'Valor Total (R$)': metrics.totalValue.toFixed(2),
-        'Observação': p.obs || ''
+        'Data': new Date(inv.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+        'Funcionário': inv.userName,
+        'Obra': inv.workName,
+        'Entrada - Saída': `${inv.entrada} às ${inv.saida}`,
+        'Horas (HH:MM)': inv.workedHoursStr,
+        'Valor (R$)': inv.valorTotal.toFixed(2)
       };
     });
 
-    // Add empty row
+    // Totais
     data.push({
+      'Data': 'TOTAIS GERAIS',
       'Funcionário': '',
-      'Data': '',
-      'Turno': '',
-      'Horas Trabalhadas': '',
-      'Horas Cálculo': '',
-      'Diárias Completas': '' as any,
-      'Horas Extras': '',
-      'Valor Total (R$)': '',
-      'Observação': ''
-    });
-
-    // Add totals
-    data.push({
-      'Funcionário': 'TOTAIS GERAIS',
-      'Data': '',
-      'Turno': '',
-      'Horas Trabalhadas': totalHoursStr,
-      'Horas Cálculo': '',
-      'Diárias Completas': '' as any,
-      'Horas Extras': '',
-      'Valor Total (R$)': valorTotal.toFixed(2),
-      'Observação': ''
+      'Obra': '',
+      'Entrada - Saída': '',
+      'Horas (HH:MM)': totalHoursStr,
+      'Valor (R$)': intervals.reduce((acc, curr) => acc + curr.valorTotal, 0).toFixed(2)
     });
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Registros');
-    XLSX.writeFile(wb, `Relatorio_Ponto_${new Date().toLocaleDateString()}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, 'Ponto');
+    XLSX.writeFile(wb, `Relatorio_Ponto_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
     setIsExportModalOpen(false);
   };
 
@@ -2611,13 +3273,16 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <Button onClick={() => setIsManualModalOpen(true)} variant="primary" className="bg-orange-600 hover:bg-orange-700 w-full-mobile">
             <Plus size={18} /> Inserir Registro Manual
           </Button>
-          <div className="flex gap-3 mobile-export-grid">
-            <Button onClick={() => { setExportType('pdf'); setIsExportModalOpen(true); }} variant="secondary" className="bg-slate-800 hover:bg-slate-700 flex-1">
-              <FileText size={18} className="text-orange-500" /> Gerar PDF
-            </Button>
-            <Button onClick={() => { setExportType('excel'); setIsExportModalOpen(true); }} variant="secondary" className="bg-slate-800 hover:bg-slate-700 flex-1">
-              <FileSpreadsheet size={18} className="text-emerald-500" /> Exportar Excel
-            </Button>
+          <div className="flex flex-col gap-2 mobile-export-grid items-end">
+            <div className="flex gap-3 w-full">
+              <Button onClick={() => generatePDF()} variant="secondary" className="bg-slate-800 hover:bg-slate-700 flex-1 text-xs">
+                <FileText size={16} className="text-orange-500" /> PDF Simples
+              </Button>
+              <Button onClick={() => generateExcel()} variant="secondary" className="bg-slate-800 hover:bg-slate-700 flex-1 text-xs">
+                <FileSpreadsheet size={16} className="text-emerald-500" /> Excel Simples
+              </Button>
+            </div>
+            <p className="text-[10px] text-slate-500 max-w-xs text-right mt-1">Para relatório oficial personalizável, utilize a aba <strong>RELATÓRIOS</strong>.</p>
           </div>
         </div>
       </div>
@@ -2727,12 +3392,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 <th className="px-6 py-5">Saída 1</th>
                 <th className="px-6 py-5">Entrada 2</th>
                 <th className="px-6 py-5">Saída 2</th>
-                <th className="px-6 py-5">Turno</th>
                 <th className="px-6 py-5">H. Trab.</th>
-                <th className="px-6 py-5">H. Calc.</th>
-                <th className="px-6 py-5">Diárias</th>
-                <th className="px-6 py-5">Extra</th>
-                <th className="px-6 py-5">Valor</th>
                 <th className="px-6 py-5 text-right">Ações</th>
               </tr>
             </thead>
@@ -2779,36 +3439,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</td>
                   <td className="px-6 py-4">
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.tipo_turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
-                      {p.tipo_turno || ShiftType.DIURNO}
-                    </span>
-                    {p.tipo_turno === ShiftType.DIURNO && (
-                      <span className={`ml-1 text-[9px] font-bold px-1 py-0.5 rounded ${p.apply_adjustment !== false ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>
-                        {p.apply_adjustment !== false ? '+1h' : 'Sem adj.'}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {p.total_hours}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-bold text-slate-400">
-                      {p.calculation_hours || '--:--'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-black text-emerald-500">
-                      {p.diarias_completas || 0}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-xs font-bold text-orange-400">
-                    {p.extra_hours || '00:00'}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-black text-emerald-400">
-                      R$ {(p.value_total || 0).toFixed(2)}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
@@ -2903,22 +3535,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 <div className="space-y-1 min-w-fit">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</p>
                   <p className="text-xs font-black text-white">{p.total_hours}</p>
-                </div>
-                <div className="space-y-1 min-w-fit text-center">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Cálc.</p>
-                  <p className="text-xs font-black text-slate-400">{p.calculation_hours || p.total_hours}</p>
-                </div>
-                <div className="space-y-1 min-w-fit text-center">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Diárias</p>
-                  <p className="text-xs font-black text-emerald-500">{p.diarias_completas || 0}</p>
-                </div>
-                <div className="space-y-1 min-w-fit text-center">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Extra</p>
-                  <p className="text-xs font-black text-orange-400">{p.extra_hours || '00:00'}</p>
-                </div>
-                <div className="space-y-1 min-w-fit text-right">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Valor</p>
-                  <p className="text-xs font-black text-white">R$ {(p.value_total || 0).toFixed(2)}</p>
                 </div>
               </div>
 
@@ -3070,35 +3686,11 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </span>
                 </div>
               </div>
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
-                  <select 
-                    value={editFormData.tipo_turno || ShiftType.DIURNO} 
-                    onChange={e => setEditFormData({ ...editFormData, tipo_turno: e.target.value as ShiftType })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-slate-100 font-bold"
-                  >
-                    <option value={ShiftType.DIURNO}>Diurno</option>
-                    <option value={ShiftType.NOTURNO}>Noturno</option>
-                  </select>
-                </div>
-                {editFormData.tipo_turno === ShiftType.DIURNO && (
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input 
-                      type="checkbox" 
-                      checked={editFormData.apply_adjustment !== false}
-                      onChange={e => setEditFormData({ ...editFormData, apply_adjustment: e.target.checked })}
-                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-600 focus:ring-orange-600/50"
-                    />
-                    <span className="text-xs font-bold text-slate-300">Aplicar +1h (Almoço Pago)</span>
-                  </label>
-                )}
-              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Obra Turno 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
-              <Input label="Obra Turno 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
+              <Input label="Obra Período 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
+              <Input label="Obra Período 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
@@ -3161,30 +3753,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           </div>
           <div className="grid grid-cols-2 gap-4">
             <Input label="Data" type="date" value={manualFormData.date} onChange={e => setManualFormData({ ...manualFormData, date: e.target.value })} required />
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
-              <div className="flex flex-col gap-3">
-                <select 
-                  value={manualFormData.tipo_turno || ShiftType.DIURNO} 
-                  onChange={e => setManualFormData({ ...manualFormData, tipo_turno: e.target.value as ShiftType })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
-                >
-                  <option value={ShiftType.DIURNO}>Diurno</option>
-                  <option value={ShiftType.NOTURNO}>Noturno</option>
-                </select>
-                {(manualFormData.tipo_turno || ShiftType.DIURNO) === ShiftType.DIURNO && (
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input 
-                      type="checkbox" 
-                      checked={manualFormData.apply_adjustment !== false}
-                      onChange={e => setManualFormData({ ...manualFormData, apply_adjustment: e.target.checked })}
-                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-orange-600 focus:ring-orange-600/50"
-                    />
-                    <span className="text-xs font-bold text-slate-300">Aplicar +1h (Almoço Pago)</span>
-                  </label>
-                )}
-              </div>
-            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <Input label="Entrada 1" value={manualFormData.entrada1} onChange={e => setManualFormData({ ...manualFormData, entrada1: e.target.value })} placeholder="00:00" />
@@ -3193,8 +3761,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <Input label="Saída 2" value={manualFormData.saida2} onChange={e => setManualFormData({ ...manualFormData, saida2: e.target.value })} placeholder="00:00" />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Obra Turno 1" value={manualFormData.entrada1_obra} onChange={e => setManualFormData({ ...manualFormData, entrada1_obra: e.target.value })} />
-            <Input label="Obra Turno 2" value={manualFormData.entrada2_obra} onChange={e => setManualFormData({ ...manualFormData, entrada2_obra: e.target.value })} />
+            <Input label="Obra Período 1" value={manualFormData.entrada1_obra} onChange={e => setManualFormData({ ...manualFormData, entrada1_obra: e.target.value })} />
+            <Input label="Obra Período 2" value={manualFormData.entrada2_obra} onChange={e => setManualFormData({ ...manualFormData, entrada2_obra: e.target.value })} />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status Manual</label>
@@ -3281,25 +3849,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
 
 
-      <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar ${exportType === 'pdf' ? 'PDF' : 'Excel'}`}>
-        <form onSubmit={handleExport} className="space-y-4">
-          <p className="text-sm text-slate-400">
-            Configure o valor da diária para calcular o valor total a pagar no relatório.
-          </p>
-          <Input 
-            label="Valor da Diária (R$)" 
-            type="number" 
-            value={diariaValue} 
-            onChange={e => setDiariaValue(e.target.value)} 
-            required 
-          />
-          <div className="pt-4">
-            <Button type="submit" className="w-full py-3">
-              {exportType === 'pdf' ? 'Gerar PDF' : 'Exportar Excel'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+
 
       {loading && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -3366,6 +3916,14 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
   });
   const [workSummary, setWorkSummary] = useState<any[]>([]);
 
+  // Export Modal states
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportType, setExportType] = useState<'pdf' | 'excel'>('pdf');
+  const [calcMode, setCalcMode] = useState<'auto' | 'diaria' | 'manual'>('auto');
+  const [globalDiariaValue, setGlobalDiariaValue] = useState<string>('180');
+  const [manualFinalValue, setManualFinalValue] = useState<string>('0');
+  const [pdfDocType, setPdfDocType] = useState<'gerencial' | 'recibo' | 'fechamento'>('gerencial');
+
   const generateReport = () => {
     const validUsers = users.filter(u => u.role !== 'admin_master');
     const validUserIds = new Set(validUsers.map(u => String(u.id)));
@@ -3379,61 +3937,45 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       return true;
     });
 
-    const processed = filtered.map(p => {
-      const user = users.find(u => String(u.id) === String(p.user_id));
-      const valorDiaria = user?.valor_diaria || 180;
-      const metrics = calculateRecordMetrics(p, valorDiaria);
-      
-      return {
-        ...p,
-        calculatedHours: metrics.workedHours,
-        calculationHours: metrics.calculationHours,
-        diarias: metrics.diariasEquivalentes,
-        diariasCompletas: metrics.diariasCompletas,
-        extraHours: metrics.extraHours,
-        cost: metrics.totalValue,
-        valorDiaria,
-        workName: p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada',
-        turno: metrics.shift
-      };
-    }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const intervals = extractIntervalsFromPoints(filtered, users, works, undefined, undefined, 'auto');
 
-    setReportData(processed);
+    setReportData(intervals);
 
-    const totalHours = somarHoras(processed.map(p => p.calculatedHours));
-    const totalDiarias = processed.reduce((acc, curr) => acc + curr.diarias, 0);
-    const totalDiariasCompletas = processed.reduce((acc, curr) => acc + curr.diariasCompletas, 0);
-    const totalCost = processed.reduce((acc, curr) => acc + curr.cost, 0);
-    const uniqueEmployees = new Set(processed.map(p => String(p.user_id))).size;
+    const totalHours = formatarMinutos(intervals.reduce((acc, curr) => acc + curr.workedMinutes, 0));
+    const totalDiarias = Math.round(intervals.reduce((acc, curr) => acc + curr.diarias, 0) * 100) / 100;
+    const totalCost = intervals.reduce((acc, curr) => acc + curr.valorTotal, 0);
+    const uniqueEmployees = new Set(intervals.map(p => String(p.userId))).size;
 
     setSummary({
       totalHours,
-      totalDiarias: totalDiariasCompletas, // Usando diárias completas para o resumo visual
+      totalDiarias,
       totalCost,
       totalEmployees: uniqueEmployees
     });
 
     const workMap = new Map();
-    processed.forEach(p => {
-      if (!workMap.has(p.workName)) {
-        workMap.set(p.workName, {
-          name: p.workName,
+    intervals.forEach(inv => {
+      const canonicalName = inv.workName.trim().toUpperCase();
+      if (!workMap.has(canonicalName)) {
+        workMap.set(canonicalName, {
+          name: inv.workName.trim(), // keep the original capitalization for the first seen
           employees: new Set(),
-          hoursList: [] as string[],
+          minutesList: [] as number[],
           diarias: 0,
           cost: 0
         });
       }
-      const w = workMap.get(p.workName);
-      w.employees.add(p.user_id);
-      w.hoursList.push(p.calculatedHours);
-      w.diarias += p.diarias;
-      w.cost += p.cost;
+      const w = workMap.get(canonicalName);
+      w.employees.add(inv.userId);
+      w.minutesList.push(inv.workedMinutes);
+      w.diarias += inv.diarias;
+      w.cost += inv.valorTotal;
     });
 
     setWorkSummary(Array.from(workMap.values()).map(w => ({
       ...w,
-      hours: somarHoras(w.hoursList),
+      hours: formatarMinutos(w.minutesList.reduce((acc: number, curr: number) => acc + curr, 0)),
+      diarias: Math.round(w.diarias * 100) / 100,
       employeeCount: w.employees.size
     })));
   };
@@ -3442,75 +3984,63 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     generateReport();
   }, [points, users, works]);
 
-  const exportPDF = () => {
-    const doc = new jsPDF('l', 'mm', 'a4');
+  const handleOfficialExport = () => {
+    setIsExportModalOpen(false);
     
-    doc.setFontSize(16);
-    doc.text('Relatório de Mão de Obra e Ponto', 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Período: ${filters.startDate ? new Date(filters.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Início'} até ${filters.endDate ? new Date(filters.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Fim'}`, 14, 22);
-    
-    const employeeName = filters.userId ? users.find(u => String(u.id) === String(filters.userId))?.name : 'Todos';
-    const workName = filters.workId ? works.find(w => String(w.id) === String(filters.workId))?.name : 'Todas';
-    doc.text(`Funcionário: ${employeeName} | Obra: ${workName}`, 14, 27);
+    // Recalculate local versions to use the modal's settings
+    const validUsers = users.filter((u: any) => u.role !== 'admin_master');
+    const validUserIds = new Set(validUsers.map((u: any) => String(u.id)));
 
-    autoTable(doc, {
-      startY: 35,
-      head: [['Func.', 'Obra', 'Data', 'Turno', 'H. Trab.', 'H. Calc.', 'Diárias', 'Extra', 'Valor']],
-      body: reportData.map(p => [
-        p.user_name,
-        p.workName,
-        new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-        p.turno || 'Diurno',
-        p.calculatedHours,
-        p.calculationHours || p.calculatedHours,
-        p.diariasCompletas.toString(),
-        p.extraHours || '00:00',
-        `R$ ${p.cost.toFixed(2)}`
-      ]),
-      theme: 'grid',
-      headStyles: { fillColor: [234, 88, 12], textColor: 255 },
-      styles: { fontSize: 7 }
+    const filtered = points.filter((p: any) => {
+      if (!validUserIds.has(String(p.user_id))) return false;
+      if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
+      if (filters.workId && String(p.work_id) !== String(filters.workId)) return false;
+      if (filters.startDate && p.date < filters.startDate) return false;
+      if (filters.endDate && p.date > filters.endDate) return false;
+      return true;
     });
 
-    const finalY = (doc as any).lastAutoTable.finalY + 10;
-    doc.setFontSize(12);
-    doc.text('Resumo por Obra', 14, finalY);
+    const userDefinedDiaria = parseFloat(globalDiariaValue) || undefined;
+    const intervalsLocal = extractIntervalsFromPoints(filtered, users, works, userDefinedDiaria, globalDiariaValue, calcMode);
     
-    autoTable(doc, {
-      startY: finalY + 5,
-      head: [['Obra', 'Funcionários', 'Total Horas', 'Total Diárias', 'Custo Total']],
-      body: workSummary.map(w => [
-        w.name,
-        w.employeeCount.toString(),
-        w.hours,
-        w.diarias.toString(),
-        `R$ ${w.cost.toFixed(2)}`
-      ]),
-      theme: 'grid',
-      headStyles: { fillColor: [51, 65, 85], textColor: 255 },
-      styles: { fontSize: 8 }
-    });
+    let totalC = 0;
+    if (calcMode === 'manual') {
+      totalC = parseFloat(manualFinalValue) || 0;
+    } else {
+        totalC = intervalsLocal.reduce((acc: number, curr: any) => acc + curr.valorTotal, 0);
+    }
 
-    const finalY2 = (doc as any).lastAutoTable.finalY + 10;
-    doc.setFontSize(11);
-    doc.text(`TOTAIS GERAIS:`, 14, finalY2);
-    doc.text(`Horas: ${summary.totalHours} | Diárias: ${summary.totalDiarias} | Custo: R$ ${summary.totalCost.toFixed(2)}`, 14, finalY2 + 6);
-
-    doc.save(`Relatorio_Completo_${new Date().toLocaleDateString()}.pdf`);
+    if (exportType === 'pdf') {
+       exportPDF(intervalsLocal, totalC);
+    } else {
+       exportExcel(intervalsLocal, totalC);
+    }
   };
 
-  const exportExcel = () => {
-    const mainData = reportData.map(p => ({
-      'Funcionário': p.user_name,
+  const exportPDF = (intervalsLocal?: any[], totalCostOverride?: number) => {
+    const finalData = intervalsLocal || reportData;
+    const totalCostToDisplay = totalCostOverride !== undefined ? totalCostOverride : summary.totalCost;
+    const diaria = parseFloat(globalDiariaValue) || 180;
+    
+    if (pdfDocType === 'recibo') {
+      generateReciboPDF(finalData, totalCostToDisplay, filters, users, diaria);
+    } else if (pdfDocType === 'fechamento') {
+      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, diaria);
+    } else {
+      generateOfficialReportPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
+    }
+  };
+
+  const exportExcel = (intervalsLocal?: any[], totalCostOverride?: number) => {
+    const finalData = intervalsLocal || reportData;
+    
+    const mainData = finalData.map((p: any) => ({
+      'Funcionário': p.userName,
       'Obra': p.workName,
       'Data': new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
-      'Turno': p.turno || 'Diurno',
-      'H. Trabalhadas': p.calculatedHours,
-      'H. Cálculo': p.calculationHours || p.calculatedHours,
-      'Diárias Completas': p.diariasCompletas,
-      'Horas Extras': p.extraHours || '00:00',
-      'Valor Total (R$)': p.cost.toFixed(2)
+      'Entrada - Saída': `${p.entrada || '--:--'} às ${p.saida || '--:--'}`,
+      'H. Trabalhadas': p.workedHoursStr,
+      'Valor Total (R$)': p.valorTotal.toFixed(2)
     }));
 
     const summaryData = workSummary.map(w => ({
@@ -3521,11 +4051,17 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Custo Total (R$)': w.cost.toFixed(2)
     }));
 
+    const subMins = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
+    const subHours = formatarMinutos(subMins);
+    const subDiarias = finalData.reduce((acc: number, curr: any) => acc + curr.diarias, 0);
+    const subEmployees = new Set(finalData.map((p: any) => String(p.userId))).size;
+    const totalCostToDisplay = totalCostOverride !== undefined ? totalCostOverride : summary.totalCost;
+
     const totalsData = [{
-      'Total Horas': summary.totalHours,
-      'Total Funcionários': summary.totalEmployees,
-      'Total Diárias': summary.totalDiarias,
-      'Custo Total (R$)': summary.totalCost.toFixed(2)
+      'Total Horas': subHours,
+      'Total Funcionários': subEmployees,
+      'Total Diárias': subDiarias.toFixed(2),
+      'Custo Total (R$)': totalCostToDisplay.toFixed(2)
     }];
 
     const wb = XLSX.utils.book_new();
@@ -3593,10 +4129,10 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         </div>
         <div className="flex justify-between items-center mt-6">
           <div className="flex gap-3">
-            <Button variant="secondary" onClick={exportExcel}>
+            <Button variant="secondary" onClick={() => { setExportType('excel'); setIsExportModalOpen(true); }}>
               <FileSpreadsheet size={18} /> Excel
             </Button>
-            <Button variant="secondary" onClick={exportPDF}>
+            <Button variant="secondary" onClick={() => { setExportType('pdf'); setIsExportModalOpen(true); }}>
               <FileText size={18} /> PDF
             </Button>
           </div>
@@ -3605,6 +4141,59 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
           </Button>
         </div>
       </Card>
+
+      <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar Relatório Oficial (${exportType === 'pdf' ? 'PDF' : 'Excel'})`}>
+        <div className="space-y-4">
+          {exportType === 'pdf' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Documento</label>
+              <select 
+                value={pdfDocType} 
+                onChange={e => setPdfDocType(e.target.value as any)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
+              >
+                <option value="gerencial">Relatório Gerencial</option>
+                <option value="recibo">Recibo Individual</option>
+                <option value="fechamento">Fechamento Mensal</option>
+              </select>
+            </div>
+          )}
+          <Input 
+            label="Valor da Diária (R$)"
+            type="number" 
+            value={globalDiariaValue} 
+            onChange={e => setGlobalDiariaValue(e.target.value)} 
+            placeholder="Ex: 180"
+            required 
+          />
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Modo de Cálculo</label>
+             <select 
+                value={calcMode} 
+                onChange={e => setCalcMode(e.target.value as any)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
+              >
+                <option value="auto">Automático (por horas)</option>
+                <option value="diaria">Por diária</option>
+                <option value="manual">Valor final manual (opcional)</option>
+            </select>
+          </div>
+          {calcMode === 'manual' && (
+            <Input 
+              label="Valor Final Manual (R$)"
+              type="number" 
+              value={manualFinalValue} 
+              onChange={e => setManualFinalValue(e.target.value)} 
+              required 
+            />
+          )}
+          <div className="pt-4">
+            <Button onClick={handleOfficialExport} className="w-full py-3">
+               {exportType === 'pdf' ? 'Gerar PDF Oficial' : 'Exportar Excel'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
         <Card className="p-4 md:p-6 border-l-4 border-l-orange-600">
@@ -3617,7 +4206,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         </Card>
         <Card className="p-4 md:p-6 border-l-4 border-l-emerald-600">
           <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Total de Diárias</p>
-          <p className="text-xl md:text-2xl font-black text-white">{summary.totalDiarias}</p>
+          <p className="text-xl md:text-2xl font-black text-white">{summary.totalDiarias.toFixed(2)}</p>
         </Card>
         <Card className="p-4 md:p-6 border-l-4 border-l-purple-600">
           <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Custo Total</p>
@@ -3639,35 +4228,27 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Funcionário</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Obra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Data</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Turno</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Calc.</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Extra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Valor</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {reportData.map((p, idx) => (
                 <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-white">{p.user_name}</td>
+                  <td className="px-6 py-4 text-sm font-medium text-white">{p.userName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{p.workName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
-                      {p.turno || 'Diurno'}
+                    <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
+                      {p.workedHoursStr}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-white">{p.calculatedHours}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.calculationHours}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.diariasCompletas}</td>
-                  <td className="px-6 py-4 text-sm text-blue-400">{p.extraHours || '00:00'}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.valorTotal.toFixed(2)}</td>
                 </tr>
               ))}
               {reportData.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-500 italic">Nenhum registro encontrado para os filtros selecionados.</td>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500 italic">Nenhum registro encontrado para os filtros selecionados.</td>
                 </tr>
               )}
             </tbody>
@@ -3680,12 +4261,11 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
             <div key={idx} className="p-4 space-y-3">
               <div className="flex justify-between items-start">
                 <div>
-                  <p className="text-base font-bold text-white">{p.user_name}</p>
+                  <p className="text-base font-bold text-white">{p.userName}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-emerald-500">R$ {p.cost.toFixed(2)}</p>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Diárias: {p.diariasCompletas}</p>
+                  <p className="text-sm font-bold text-emerald-500">R$ {p.valorTotal.toFixed(2)}</p>
                 </div>
               </div>
 
@@ -3694,20 +4274,11 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <span className="truncate">{p.workName}</span>
               </div>
 
-              <div className="flex justify-between items-center bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
-                <div className="flex items-center gap-2">
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${p.turno === ShiftType.NOTURNO ? 'bg-indigo-500/20 text-indigo-400' : 'bg-orange-500/20 text-orange-400'}`}>
-                    {p.turno || 'Diurno'}
-                  </span>
-                </div>
+              <div className="flex justify-between items-end">
                 <div className="text-right flex gap-3">
                   <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Calc.</p>
-                    <p className="text-xs font-black text-orange-500">{p.calculationHours}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Extra</p>
-                    <p className="text-xs font-black text-blue-400">{p.extraHours || '00:00'}</p>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Trab.</p>
+                    <p className="text-xs font-black text-white">{p.workedHoursStr}</p>
                   </div>
                 </div>
               </div>
@@ -3744,7 +4315,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm font-bold text-white">{w.name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.employeeCount}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.hours}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.diarias}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{Number(w.diarias).toFixed(2)}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">R$ {w.cost.toFixed(2)}</td>
                 </tr>
               ))}
@@ -3783,7 +4354,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 </div>
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Diárias</p>
-                  <p className="text-sm font-bold text-white">{w.diarias}</p>
+                  <p className="text-sm font-bold text-white">{Number(w.diarias).toFixed(2)}</p>
                 </div>
               </div>
             </div>
@@ -3802,7 +4373,6 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[], onRefresh: () => void }) {
   const [point, setPoint] = useState<PointRecord | null>(null);
   const [selectedWorkId, setSelectedWorkId] = useState<string | ''>('');
-  const [selectedShift, setSelectedShift] = useState<ShiftType>(ShiftType.DIURNO);
   const [loading, setLoading] = useState(false);
   const [obs, setObs] = useState('');
   const [status, setStatus] = useState<'idle' | 'locating' | 'refining' | 'saving'>('idle');
@@ -3820,10 +4390,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     if (todayPoint?.work_id) {
       setSelectedWorkId(String(todayPoint.work_id));
     }
-    if (point?.tipo_turno && !point.entrada1) {
-      setSelectedShift(point.tipo_turno);
-    } else if (point?.tipo_turno) {
-      setSelectedShift(point.tipo_turno);
+    if (point?.entrada1) {
     }
   }, [user.id]);
 
@@ -3932,8 +4499,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
           obs: '',
           total_hours: '00:00',
-          status: WorkStatus.TRABALHANDO,
-          tipo_turno: selectedShift
+          status: WorkStatus.TRABALHANDO
         };
         allPoints.push(point);
       }
@@ -3944,13 +4510,9 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       const acc = pos ? pos.coords.accuracy : 0;
       
       if (point) {
-        point.tipo_turno = selectedShift;
       }
 
       if (type === 'entrada1') {
-        const autoShift = getAutomaticShift(horaLocal);
-        point.tipo_turno = autoShift;
-        setSelectedShift(autoShift);
         point.entrada1 = horaLocal;
         point.entrada1_lat = lat; point.entrada1_lng = lng; point.entrada1_acc = acc; point.entrada1_address = address;
         point.work_id = String(selectedWorkId);
@@ -4004,7 +4566,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       // Replicating the 3km/2min logic would require storing timestamps for each point.
       // For now, let's keep it simple or add timestamps to PointRecord.
       
-      point.total_hours = calcularHorasRecord(point);
+      point.total_hours = calculateRecordMetrics(point).workedHours;
       
       await storage.savePoints(allPoints);
 
@@ -4076,7 +4638,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
                 <span className="text-sm font-black">{status.label}</span>
               </div>
               {status.label === 'Pausado' && (
-                <span className="text-[10px] font-bold uppercase tracking-widest mt-1 animate-pulse">Aguardando próximo turno</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest mt-1 animate-pulse">Aguardando registro</span>
               )}
               {point?.work_name && (
                 <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {point.work_name}</span>
@@ -4112,24 +4674,6 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
                   </select>
                 </div>
               )}
-              
-              <div className="space-y-1.5 text-left">
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Turno</label>
-                <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1.5 rounded-xl border border-slate-700">
-                  <button
-                    onClick={() => setSelectedShift(ShiftType.DIURNO)}
-                    className={`py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${selectedShift === ShiftType.DIURNO ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Diurno
-                  </button>
-                  <button
-                    onClick={() => setSelectedShift(ShiftType.NOTURNO)}
-                    className={`py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${selectedShift === ShiftType.NOTURNO ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Noturno
-                  </button>
-                </div>
-              </div>
             </div>
 
             {(nextAction === 'saida1' || nextAction === 'saida2') && point?.work_name && (
@@ -4188,7 +4732,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         <Card className="p-6">
           <div className="flex justify-between items-center mb-4">
             <h4 className="font-bold text-slate-400 uppercase tracking-widest text-xs">Resumo do Dia</h4>
-            <span className="text-orange-500 font-black">{point.total_hours}h trabalhadas</span>
+            <span className="text-orange-500 font-black">{point.total_hours}</span>
           </div>
           <div className="flex items-start gap-3 text-xs text-slate-500">
             <Info size={14} className="mt-0.5 shrink-0" />
@@ -4199,7 +4743,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
       <Modal isOpen={isPauseModalOpen} onClose={() => setIsPauseModalOpen(false)} title="Encerrar jornada?">
         <div className="space-y-6">
-          <p className="text-slate-300">Deseja encerrar a jornada ou iniciar um novo turno?</p>
+          <p className="text-slate-300">Deseja encerrar a jornada ou realizar uma pausa?</p>
           <div className="grid grid-cols-1 gap-3">
             <Button onClick={() => setIsPauseModalOpen(false)} variant="primary" className="w-full py-4">
               Continuar jornada
