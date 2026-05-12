@@ -250,7 +250,7 @@ function somarHoras(listaDeHoras: string[]): string {
   return formatarMinutos(totalMinutos);
 }
 
-const MINUTES_PER_DIARIA = 540; // 9h
+const MINUTES_PER_DIARIA = 600; // 10h
 
 function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0) {
   const p1 = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
@@ -351,7 +351,7 @@ function generateOfficialReportPDF(
     const doc = new jsPDF('p', 'mm', 'a4');
     const marginLeft = 15;
     const pageWidth = 210;
-    let currentY = 15;
+    let currentY = 18;
     
     const subMinsTotal = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
     const subHoursTotal = formatarMinutos(subMinsTotal);
@@ -362,125 +362,211 @@ function generateOfficialReportPDF(
     const colorBlue: [number, number, number] = [30, 58, 95];
     const colorOrange: [number, number, number] = [234, 88, 12];
     const colorSlate: [number, number, number] = [100, 116, 139];
+    const colorLight: [number, number, number] = [241, 245, 249];
 
-    // --- 1. HEADER (3 COLUMNS) ---
+    // --- DECORATIVE ELEMENTS (HEADER) ---
+    // Top right polygon - Very slim and sharp corner as in reference
     doc.setFillColor(...colorBlue);
-    doc.roundedRect(marginLeft, currentY, 12, 12, 1.5, 1.5, 'F');
-    // Accent line
+    doc.triangle(pageWidth, 0, pageWidth - 35, 0, pageWidth, 8, 'F');
+    // Orange accent dot - tiny and tucked in
     doc.setFillColor(...colorOrange);
-    doc.rect(marginLeft + 2.5, currentY + 10, 7, 0.8, 'F');
+    doc.circle(pageWidth - 1, 1, 2.5, 'F');
+    
+    // --- 1. HEADER (LOGO & TITLES) ---
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, 13, 13, 1.5, 1.5, 'F');
+    // Accent line in logo
+    doc.setFillColor(...colorOrange);
+    doc.rect(marginLeft + 2.5, currentY + 10.5, 8, 1, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(7.5);
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text('A&R', marginLeft + 6, currentY + 7.5, { align: 'center' });
+    doc.text('A&R', marginLeft + 6.5, currentY + 8, { align: 'center' });
     
     doc.setTextColor(30, 41, 59);
-    doc.setFontSize(12);
-    doc.text('A&R ENGENHARIA', marginLeft + 16, currentY + 4);
-    doc.setFontSize(6);
+    doc.setFontSize(14);
+    doc.text('A&R ENGENHARIA', marginLeft + 18, currentY + 4);
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 16, currentY + 8);
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 18, currentY + 10);
 
-    currentY += 14;
-    doc.setTextColor(...colorBlue);
-    doc.setFontSize(16);
+    currentY += 22;
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(20);
     doc.setFont("helvetica", "bold");
-    doc.text('RELATÓRIO GERENCIAL', pageWidth / 2, currentY, { align: 'center' });
+    doc.text('RELATÓRIO GERENCIAL', marginLeft, currentY);
+    
+    // Orange underline - elegant
+    doc.setDrawColor(...colorOrange);
+    doc.setLineWidth(1.2);
+    doc.line(marginLeft, currentY + 4, marginLeft + 35, currentY + 4);
 
-    // Header Meta
-    doc.setFontSize(7);
+    // Header Meta - Gerado em (Aligned to the right, compact)
+    doc.setFontSize(7.5);
     doc.setTextColor(...colorSlate);
     doc.setFont("helvetica", "normal");
     const now = new Date();
-    doc.text(`Gerado em:`, pageWidth - marginLeft, currentY - 2, { align: 'right' });
-    doc.setFont("helvetica", "bold");
-    doc.text(`${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageWidth - marginLeft, currentY + 1.5, { align: 'right' });
-
-    currentY += 10;
-    // Section line
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.3);
-    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
     
-    currentY += 10;
+    // Modern calendar icon for "Gerado em" - more compact and closer to text
+    const metaIconX = pageWidth - marginLeft - 45;
+    const metaIconY = currentY - 5;
+    doc.setDrawColor(...colorBlue);
+    doc.setLineWidth(0.4);
+    // Calendar shape
+    doc.rect(metaIconX - 2, metaIconY - 2, 4, 4, 'D');
+    doc.line(metaIconX - 2, metaIconY - 0.5, metaIconX + 2, metaIconY - 0.5); // header line
+    // tiny clock circle inside calendar or next to it
+    doc.circle(metaIconX + 1.2, metaIconY + 1.2, 1, 'D');
+    
+    doc.text(`Gerado em:`, pageWidth - marginLeft, currentY - 7, { align: 'right' });
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageWidth - marginLeft, currentY - 2, { align: 'right' });
 
-    // --- 2. INFO BAR (4 Columns) ---
+    currentY += 14;
+
+    // --- 2. INFO BAR ---
     const employeeName = filters.userId ? users.find(u => String(u.id) === String(filters.userId))?.name || '---' : 'Todos';
     const periodoStr = `${filters.startDate ? new Date(filters.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Início'} até ${filters.endDate ? new Date(filters.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : 'Fim'}`;
     const selWorkName = filters.workId ? works.find(w => String(w.id) === String(filters.workId))?.name || '---' : 'Todas';
 
     const totalW = pageWidth - (marginLeft * 2);
-    const colWidths = [totalW * 0.20, totalW * 0.30, totalW * 0.20, totalW * 0.30];
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(marginLeft, currentY, totalW, 16, 2, 2, 'FD');
+
+    const colWidths = [totalW * 0.22, totalW * 0.28, totalW * 0.22, totalW * 0.28];
+    const labels = ['FUNCIONÁRIO', 'PERÍODO', 'OBRA', 'CÁLCULO'];
     
-    const drawInfo = (colIndex: number, label: string, val: string, subVal?: string) => {
-      let x = marginLeft;
-      for(let i=0; i<colIndex; i++) x += colWidths[i];
-      const w = colWidths[colIndex];
+    let xOffset = marginLeft;
+    for(let i=0; i<4; i++) {
+        const w = colWidths[i];
+        
+        // Circular icon container
+        doc.setFillColor(...colorBlue);
+        doc.circle(xOffset + 8, currentY + 8, 4, 'F');
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.4);
+        const icX = xOffset + 8;
+        const icY = currentY + 8;
 
-      doc.setFontSize(7);
-      doc.setTextColor(...colorSlate);
-      doc.setFont("helvetica", "bold");
-      doc.text(label, x + w / 2, currentY, { align: 'center' });
-      
-      doc.setFontSize(8.5);
-      doc.setTextColor(15, 23, 42);
-      doc.setFont("helvetica", "bold");
-      const splitVal = doc.splitTextToSize(val, w - 4);
-      doc.text(splitVal, x + w / 2, currentY + 5, { align: 'center' });
-      
-      if (subVal) {
+        if (i === 0) { // User
+            doc.circle(icX, icY - 1, 1.2, 'D');
+            doc.ellipse(icX, icY + 1.2, 2, 1, 'D');
+        } else if (i === 1) { // Calendar
+            doc.rect(icX - 1.5, icY - 1.5, 3, 3, 'D');
+            doc.line(icX - 1.5, icY - 0.5, icX + 1.5, icY - 0.5);
+            doc.line(icX - 0.7, icY - 2, icX - 0.7, icY - 1); // rings
+            doc.line(icX + 0.7, icY - 2, icX + 0.7, icY - 1);
+        } else if (i === 2) { // Building
+            doc.rect(icX - 1.5, icY - 1.5, 1.2, 3.5, 'D');
+            doc.rect(icX, icY - 0.5, 1.5, 2.5, 'D');
+            doc.line(icX - 1.5, icY - 0.5, icX - 0.3, icY - 0.5);
+        } else { // Calculator/Keypad
+            doc.rect(icX - 1.5, icY - 1.8, 3, 3.6, 'D');
+            doc.rect(icX - 1, icY + 0.6, 0.5, 0.5, 'D'); // buttons
+            doc.rect(icX, icY + 0.6, 0.5, 0.5, 'D');
+            doc.rect(icX + 1, icY + 0.6, 0.5, 0.5, 'D');
+            doc.line(icX - 1, icY - 0.8, icX + 1, icY - 0.8); // screen
+        }
+
         doc.setFontSize(6.5);
-        doc.setFont("helvetica", "normal");
         doc.setTextColor(...colorSlate);
-        doc.text(subVal, x + w / 2, currentY + 9, { align: 'center' });
-      }
-    };
+        doc.setFont("helvetica", "bold");
+        doc.text(labels[i], xOffset + 14, currentY + 6);
+        
+        doc.setFontSize(8.5);
+        doc.setTextColor(15, 23, 42);
+        const values = [employeeName.toUpperCase(), periodoStr, selWorkName.toUpperCase(), calculationModeText];
+        const val = values[i];
+        const splitVal = doc.splitTextToSize(val, w - 16);
+        doc.text(splitVal, xOffset + 14, currentY + 10);
+        
+        if (i === 3 && calcMode !== 'manual') {
+            doc.setFontSize(6);
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(...colorSlate);
+            doc.text(`Diária base: R$ ${globalDiaria.toFixed(2)}`, xOffset + 14, currentY + 14);
+        }
 
-    drawInfo(0, 'FUNCIONÁRIO', employeeName.toUpperCase());
-    drawInfo(1, 'PERÍODO', periodoStr);
-    drawInfo(2, 'OBRA', selWorkName.toUpperCase());
-    const subCalcTextText = calcMode !== 'manual' ? `Diária base: R$ ${globalDiaria.toFixed(2)}` : '';
-    drawInfo(3, 'CÁLCULO', calculationModeText, subCalcTextText);
+        if (i < 3) {
+            doc.setDrawColor(226, 232, 240);
+            doc.setLineWidth(0.2);
+            doc.line(xOffset + w, currentY + 3, xOffset + w, currentY + 13);
+        }
+        xOffset += w;
+    }
 
-    currentY += 18;
+    currentY += 24;
 
     // --- 3. SUMMARY CARDS ---
-    const gridSpacing = 4;
-    const cardW = (pageWidth - (marginLeft * 2) - (gridSpacing * 3)) / 4;
+    const gridSpacing = 5;
+    const cardW = (totalW - (gridSpacing * 3)) / 4;
 
     const drawCard = (x: number, label: string, val: string, isHours = false, isCost = false) => {
+      // Soft modern shadow/border effect
+      doc.setFillColor(242, 244, 247);
+      doc.roundedRect(x + 0.5, currentY + 0.5, cardW, 24, 2, 2, 'F');
+      
       doc.setDrawColor(226, 232, 240);
       doc.setFillColor(255, 255, 255);
-      doc.roundedRect(x, currentY, cardW, 20, 1, 1, 'FD');
+      if (isCost) {
+        doc.setDrawColor(...colorOrange);
+        doc.setLineWidth(0.6);
+      } else {
+        doc.setLineWidth(0.25);
+      }
+      doc.roundedRect(x, currentY, cardW, 24, 2, 2, 'FD');
+
+      // Decorative dot for icon position - better centered
+      doc.setFillColor(242, 245, 248);
+      doc.circle(x + cardW / 2, currentY + 6, 4.5, 'F');
       
-      doc.setFontSize(7);
-      doc.setTextColor(...colorSlate);
-      doc.setFont("helvetica", "bold");
-      doc.text(label, x + (cardW / 2), currentY + 6, { align: 'center' });
+      const icX = x + cardW / 2;
+      const icY = currentY + 6;
+      doc.setDrawColor(...colorBlue);
+      doc.setLineWidth(0.4);
       
       if (isHours) {
-        doc.setFontSize(16);
-        doc.setTextColor(15, 23, 42); 
-        doc.setFont("helvetica", "bold");
-        doc.setDrawColor(30, 58, 95);
-        doc.setLineWidth(0.4);
-        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
-      } else if (isCost) {
-        doc.setFontSize(13);
-        doc.setTextColor(...colorOrange);
-        doc.setFont("helvetica", "bold");
-        doc.setDrawColor(...colorOrange);
-        doc.setLineWidth(0.4);
-        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
+          doc.circle(icX, icY, 2, 'D'); // clock
+          doc.line(icX, icY, icX, icY - 1);
+          doc.line(icX, icY, icX + 1, icY);
+      } else if (label.includes('DIÁRIAS')) {
+          doc.rect(icX - 1.5, icY - 1.5, 3, 3, 'D');
+          doc.line(icX - 1.5, icY - 0.4, icX + 1.5, icY - 0.4);
+      } else if (label.includes('FUNCIONÁRIOS')) {
+          doc.circle(icX - 1.2, icY, 1, 'D'); // multiple users
+          doc.circle(icX + 1.2, icY, 1, 'D');
+          doc.circle(icX, icY - 1, 1, 'D');
       } else {
-        doc.setFontSize(10.5);
+          doc.setTextColor(...colorOrange);
+          doc.setFontSize(8);
+          doc.text('$', icX, icY + 1.2, { align: 'center' });
+      }
+      
+      doc.setFontSize(7.5);
+      doc.setTextColor(...colorSlate);
+      doc.setFont("helvetica", "bold");
+      doc.text(label, x + (cardW / 2), currentY + 13, { align: 'center' });
+      
+      if (isHours || isCost) {
+        doc.setFontSize(15);
+        doc.setTextColor(...(isHours ? colorBlue : colorOrange)); 
+        doc.setFont("helvetica", "bold");
+        doc.text(val, x + (cardW / 2), currentY + 19, { align: 'center' });
+        doc.setDrawColor(...(isHours ? colorBlue : colorOrange));
+        doc.setLineWidth(0.8);
+        doc.line(x + 8, currentY + 21, x + cardW - 8, currentY + 21);
+      } else {
+        doc.setFontSize(13);
         doc.setTextColor(51, 65, 85);
         doc.setFont("helvetica", "bold");
+        doc.text(val, x + (cardW / 2), currentY + 19, { align: 'center' });
         doc.setDrawColor(226, 232, 240);
-        doc.setLineWidth(0.3);
-        doc.line(x + 8, currentY + 16, x + cardW - 8, currentY + 16);
+        doc.setLineWidth(0.4);
+        doc.line(x + 12, currentY + 21, x + cardW - 12, currentY + 21);
       }
-      doc.text(val, x + (cardW / 2), currentY + 14, { align: 'center' });
     };
 
     drawCard(marginLeft, 'TOTAL DE HORAS', subHoursTotal, true);
@@ -488,14 +574,35 @@ function generateOfficialReportPDF(
     drawCard(marginLeft + (cardW + gridSpacing) * 2, 'FUNCIONÁRIOS', subEmployeesTotal.toString());
     drawCard(marginLeft + (cardW + gridSpacing) * 3, 'CUSTO TOTAL', formatCurrency(totalCostToDisplay), false, true);
 
-    currentY += 26;
+    currentY += 32;
 
     // --- 4. SUMMARY BY WORK TABLE ---
-    doc.setFontSize(11);
-    doc.setTextColor(...colorBlue);
-    doc.setFont("helvetica", "bold");
-    doc.text('RESUMO POR OBRA', marginLeft, currentY);
-    currentY += 2.5;
+    const drawSectionHeader = (title: string, y: number, isTable2 = false) => {
+        doc.setFillColor(...colorBlue);
+        doc.circle(marginLeft + 3, y - 1, 3.5, 'F');
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.4);
+        
+        const icX = marginLeft + 3;
+        const icY = y - 1;
+        if (isTable2) {
+            doc.rect(icX - 1.2, icY - 1.2, 2.4, 2.4, 'D'); // list icon
+            doc.line(icX - 0.6, icY - 0.6, icX + 0.6, icY - 0.6);
+            doc.line(icX - 0.6, icY + 0.6, icX + 0.6, icY + 0.6);
+        } else {
+            doc.line(icX - 1.5, icY + 1.2, icX - 1.5, icY - 0.5, 'D'); // bars icon
+            doc.line(icX, icY + 1.2, icX, icY - 1.2, 'D');
+            doc.line(icX + 1.5, icY + 1.2, icX + 1.5, icY + 0.2, 'D');
+        }
+        
+        doc.setFontSize(11);
+        doc.setTextColor(...colorBlue);
+        doc.setFont("helvetica", "bold");
+        doc.text(title, marginLeft + 8, y);
+    };
+
+    drawSectionHeader('RESUMO POR OBRA', currentY);
+    currentY += 6;
 
     const workSummaryMap = new Map();
     finalData.forEach(p => {
@@ -526,58 +633,35 @@ function generateOfficialReportPDF(
         ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
-      headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 9.5, halign: 'center', cellPadding: 1.5 },
-      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.5 },
-      alternateRowStyles: { fillColor: [250, 250, 252] },
+      headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8, halign: 'center', cellPadding: 1 },
+      bodyStyles: { fontSize: 7.5, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1 },
+      alternateRowStyles: { fillColor: [252, 252, 254] },
       columnStyles: { 
-        0: { halign: 'left', cellWidth: 'auto' }, 
+        0: { halign: 'left', fontStyle: 'bold', cellWidth: 'auto' }, 
         1: { halign: 'center' }, 
         2: { halign: 'center' }, 
         3: { halign: 'center' }, 
         4: { halign: 'right', fontStyle: 'bold' } 
       },
-      didParseCell: (data) => {
+      didParseCell: (data: any) => {
         if (data.row.index === workSummaryRows.length) {
-          data.cell.styles.fillColor = [241, 245, 249];
+          data.cell.styles.fillColor = colorBlue;
           data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.textColor = [30, 41, 59];
+          data.cell.styles.textColor = [255, 255, 255];
         }
       }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 8;
+    currentY = (doc as any).lastAutoTable.finalY + 10;
 
     // --- 5. DETALHAMENTO GERAL ---
-    doc.setFontSize(11);
-    doc.setTextColor(...colorBlue);
-    doc.setFont("helvetica", "bold");
-    doc.text('DETALHAMENTO GERAL', marginLeft, currentY);
-    currentY += 3;
+    drawSectionHeader('DETALHAMENTO GERAL', currentY, true);
+    currentY += 6;
 
-    // Sort finalData by date then entrance time
     const sortedData = [...finalData].sort((a, b) => {
-      const dateA = a.date;
-      const dateB = b.date;
-      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.entrada || '').localeCompare(b.entrada || '');
     });
-
-    // Estimate table height to avoid breaks
-    const bodyRowHeight = 4.5; 
-    const headHeight = 5.5;
-    const tableHeight = headHeight + (sortedData.length * bodyRowHeight);
-    const pageBottom = 280;
-    const availableSpace = pageBottom - currentY;
-
-    if (tableHeight > availableSpace && tableHeight < (pageBottom - 20)) {
-        doc.addPage();
-        currentY = 20;
-        doc.setFontSize(10);
-        doc.setTextColor(...colorBlue);
-        doc.setFont("helvetica", "bold");
-        doc.text('DETALHAMENTO GERAL', marginLeft, currentY);
-        currentY += 6;
-    }
 
     autoTable(doc, {
       startY: currentY,
@@ -592,33 +676,43 @@ function generateOfficialReportPDF(
       ]),
       foot: [['TOTAL GERAL', '', '', subHoursTotal, formatCurrency(totalCostToDisplay)]],
       theme: 'striped',
-      headStyles: { fillColor: [51, 65, 85], fontSize: 9.5, halign: 'center', cellPadding: 1.2 },
-      bodyStyles: { fontSize: 8.5, halign: 'center', cellPadding: 1.4 },
-      footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontSize: 9.5, fontStyle: 'bold', halign: 'center', cellPadding: 1.6 },
+      headStyles: { fillColor: colorBlue, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', cellPadding: 1 },
+      footStyles: { fillColor: colorBlue, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold', halign: 'center', valign: 'middle', cellPadding: 1.5, minCellHeight: 6 },
       columnStyles: { 
-        0: { cellWidth: 20 },
+        0: { cellWidth: 26, halign: 'left' },
         1: { halign: 'left' },
-        2: { halign: 'center' },
-        3: { halign: 'center' },
-        4: { halign: 'right' } 
+        2: { halign: 'center', cellWidth: 40 },
+        3: { halign: 'center', cellWidth: 22 },
+        4: { halign: 'right', cellWidth: 30 } 
       },
       didParseCell: (data) => {
         if (data.section === 'foot') {
-           if (data.column.index === 0) data.cell.styles.halign = 'left';
-           if (data.column.index === 4) data.cell.styles.halign = 'right';
+           // Ensure vertical centering in footer
+           data.cell.styles.valign = 'middle';
         }
       }
     });
 
-    // FOOTER
+    // FOOTER (MODERN DESIGN)
     const totalPages = (doc.internal as any).getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
+        doc.setFillColor(...colorBlue);
+        doc.rect(0, 288, pageWidth, 9, 'F');
+        doc.setFillColor(...colorOrange);
+        doc.rect(0, 287.5, 60, 0.4, 'F');
+        
+        doc.setFontSize(7.5);
+        doc.setTextColor(255, 255, 255);
+        doc.text('A&R Engenharia | Sistema de Controle de Ponto', marginLeft, 294);
+        
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(pageWidth - marginLeft - 18, 290, 18, 5, 0.8, 0.8, 'F');
+        doc.setTextColor(...colorBlue);
         doc.setFontSize(7);
-        doc.setTextColor(...colorSlate);
-        doc.line(marginLeft, 282, pageWidth - marginLeft, 282);
-        doc.text('Relatório gerado por A&R Engenharia | Sistema de Controle de Ponto', marginLeft, 287);
-        doc.text(`Página ${i} de ${totalPages}`, pageWidth - marginLeft, 287, { align: 'right' });
+        doc.setFont("helvetica", "bold");
+        doc.text(`Página ${i} de ${totalPages}`, pageWidth - marginLeft - 9, 293.5, { align: 'center' });
     }
 
     doc.save(`Relatorio_Gerencial_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
@@ -633,8 +727,8 @@ function generateReciboPDF(
 ) {
     const doc = new jsPDF('p', 'mm', 'a4');
     const pageWidth = 210;
-    const marginLeft = 20;
-    let currentY = 15;
+    const marginLeft = 15;
+    let currentY = 18;
 
     const subMinsTotal = finalData.reduce((acc: number, curr: any) => acc + curr.workedMinutes, 0);
     const subHoursTotal = formatarMinutos(subMinsTotal);
@@ -646,76 +740,161 @@ function generateReciboPDF(
     const colorOrange: [number, number, number] = [234, 88, 12];
     const colorSlate: [number, number, number] = [100, 116, 139];
 
+    // --- DECORATIVE ELEMENTS (HEADER) ---
+    doc.setFillColor(...colorBlue);
+    doc.triangle(pageWidth, 0, pageWidth - 35, 0, pageWidth, 8, 'F');
+    doc.setFillColor(...colorOrange);
+    doc.circle(pageWidth - 1, 1, 2.5, 'F');
+    
     // --- 1. HEADER ---
     doc.setFillColor(...colorBlue);
-    doc.roundedRect(marginLeft, currentY, 14, 14, 2, 2, 'F');
-    // Accent line
+    doc.roundedRect(marginLeft, currentY, 13, 13, 1.5, 1.5, 'F');
     doc.setFillColor(...colorOrange);
-    doc.rect(marginLeft + 3, currentY + 12, 8, 1, 'F');
+    doc.rect(marginLeft + 2.5, currentY + 10.5, 8, 1, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(10);
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text('A&R', marginLeft + 7, currentY + 9, { align: 'center' });
+    doc.text('A&R', marginLeft + 6.5, currentY + 8, { align: 'center' });
     
     doc.setTextColor(30, 41, 59);
-    doc.setFontSize(16);
-    doc.text('A&R ENGENHARIA', marginLeft + 18, currentY + 6);
-    doc.setFontSize(7);
+    doc.setFontSize(14);
+    doc.text('A&R ENGENHARIA', marginLeft + 18, currentY + 4);
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 18, currentY + 11);
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 18, currentY + 10);
 
-    currentY += 20;
+    currentY += 22;
+    doc.setTextColor(15, 23, 42);
     doc.setFontSize(22);
-    doc.setTextColor(...colorOrange);
     doc.setFont("helvetica", "bold");
-    doc.text('RECIBO DE PAGAMENTO', pageWidth / 2, currentY, { align: 'center' });
+    doc.text('RECIBO INDIVIDUAL', marginLeft, currentY);
+    
+    doc.setDrawColor(...colorOrange);
+    doc.setLineWidth(1.2);
+    doc.line(marginLeft, currentY + 4, marginLeft + 35, currentY + 4);
 
-    currentY += 10;
-    // Info Block
-    const drawInfo = (label: string, val: string, x: number) => {
-      doc.setFontSize(8);
-      doc.setTextColor(...colorSlate);
-      doc.text(label, x, currentY);
-      doc.setFontSize(12);
-      doc.setTextColor(30, 41, 59);
-      doc.setFont("helvetica", "bold");
-      doc.text(val.toUpperCase(), x, currentY + 7);
-    };
+    // Gerado em area
+    doc.setFontSize(7.5);
+    doc.setTextColor(...colorSlate);
+    doc.setFont("helvetica", "normal");
+    const now = new Date();
+    const metaIconX = pageWidth - marginLeft - 45;
+    const metaIconY = currentY - 5;
+    doc.setDrawColor(...colorBlue);
+    doc.setLineWidth(0.4);
+    doc.rect(metaIconX - 2, metaIconY - 2, 4, 4, 'D');
+    doc.line(metaIconX - 2, metaIconY - 0.5, metaIconX + 2, metaIconY - 0.5);
+    doc.circle(metaIconX + 1.2, metaIconY + 1.2, 1, 'D');
+    
+    doc.text(`Gerado em:`, pageWidth - marginLeft, currentY - 7, { align: 'right' });
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageWidth - marginLeft, currentY - 2, { align: 'right' });
 
-    drawInfo('FUNCIONÁRIO', employeeName, marginLeft + 10);
-    currentY += 10;
-    drawInfo('PERÍODO', periodoStr, marginLeft + 10);
+    currentY += 14;
 
-    currentY += 8;
+    // --- 2. INFO BAR ---
+    const totalW = pageWidth - (marginLeft * 2);
+    doc.setFillColor(255, 255, 255);
     doc.setDrawColor(226, 232, 240);
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
-    doc.setLineDashPattern([], 0);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(marginLeft, currentY, totalW, 16, 2, 2, 'FD');
 
-    currentY += 10;
-    const drawRow = (label: string, val: string) => {
-      doc.setFontSize(10);
-      doc.setTextColor(71, 85, 105);
-      doc.setFont("helvetica", "normal");
-      doc.text(label, marginLeft + 10, currentY);
-      doc.setTextColor(30, 41, 59);
-      doc.setFont("helvetica", "bold");
-      doc.text(val, pageWidth - marginLeft - 10, currentY, { align: 'right' });
-      currentY += 8;
+    const colWidths = [totalW * 0.25, totalW * 0.30, totalW * 0.22, totalW * 0.23];
+    const labels = ['FUNCIONÁRIO', 'PERÍODO', 'TOTAL DE HORAS', 'TOTAL DE DIÁRIAS'];
+    const values = [employeeName.toUpperCase(), periodoStr, subHoursTotal, subDiariasTotal.toFixed(2)];
+    
+    let xOffset = marginLeft;
+    for (let i = 0; i < 4; i++) {
+        const w = colWidths[i];
+        doc.setFillColor(...colorBlue);
+        doc.circle(xOffset + 8, currentY + 8, 4, 'F');
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.4);
+        const icX = xOffset + 8;
+        const icY = currentY + 8;
+
+        if (i === 0) { doc.circle(icX, icY - 1, 1.2, 'D'); doc.ellipse(icX, icY + 1.2, 2, 1, 'D'); }
+        else if (i === 1) { doc.rect(icX - 1.5, icY - 1.5, 3, 3, 'D'); doc.line(icX - 1.5, icY - 0.5, icX + 1.5, icY - 0.5); }
+        else if (i === 2) { doc.circle(icX, icY, 2, 'D'); doc.line(icX, icY, icX, icY - 1); doc.line(icX, icY, icX + 1, icY); }
+        else { doc.rect(icX - 1.5, icY - 1.5, 3, 3, 'D'); }
+
+        doc.setFontSize(6.5);
+        doc.setTextColor(...colorSlate);
+        doc.setFont("helvetica", "bold");
+        doc.text(labels[i], xOffset + 14, currentY + 6);
+        doc.setFontSize(8.5);
+        doc.setTextColor(15, 23, 42);
+        doc.text(values[i], xOffset + 14, currentY + 10);
+        
+        if (i < 3) {
+            doc.setDrawColor(226, 232, 240);
+            doc.setLineWidth(0.2);
+            doc.line(xOffset + w, currentY + 3, xOffset + w, currentY + 13);
+        }
+        xOffset += w;
+    }
+
+    currentY += 24;
+
+    // --- 3. PREMIUM TOTAL CARD ---
+    const cardW = (totalW - 10) / 2;
+    // Total a Pagar Card
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, cardW + 30, 24, 2, 2, 'F');
+    doc.setDrawColor(...colorBlue);
+    doc.setLineWidth(0.8);
+    doc.roundedRect(marginLeft, currentY, cardW + 30, 24, 2, 2, 'D');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text('TOTAL A PAGAR', marginLeft + 15, currentY + 7);
+    
+    doc.setTextColor(...colorOrange);
+    doc.setFontSize(22);
+    doc.text(formatCurrency(totalCostToDisplay), marginLeft + 15, currentY + 18);
+    
+    // Valor da Diária Card
+    const secondCardX = marginLeft + cardW + 40;
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(secondCardX, currentY, cardW - 30, 24, 2, 2, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(secondCardX, currentY, cardW - 30, 24, 2, 2, 'D');
+    
+    doc.setTextColor(...colorSlate);
+    doc.setFontSize(7);
+    doc.text('VALOR DA DIÁRIA', secondCardX + 10, currentY + 7);
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(14);
+    doc.text(formatCurrency(globalDiaria), secondCardX + 10, currentY + 16);
+
+    currentY += 32;
+
+    // --- 4. TABLES ---
+    const drawSectionHeader = (title: string, y: number, isList = false) => {
+        doc.setFillColor(...colorBlue);
+        doc.circle(marginLeft + 3, y - 1, 3.5, 'F');
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.4);
+        const icX = marginLeft + 3;
+        const icY = y - 1;
+        if (isList) { doc.rect(icX - 1.2, icY - 1.2, 2.4, 2.4, 'D'); }
+        else { doc.line(icX - 1.5, icY + 1.2, icX - 1.5, icY - 0.5); doc.line(icX, icY + 1.2, icX, icY - 1.2); }
+        doc.setFontSize(11);
+        doc.setTextColor(...colorBlue);
+        doc.setFont("helvetica", "bold");
+        doc.text(title, marginLeft + 8, y);
     };
 
-    drawRow('TOTAL DE HORAS', subHoursTotal);
-    drawRow('TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
-    drawRow('VALOR DA DIÁRIA', formatCurrency(globalDiaria));
+    drawSectionHeader('RESUMO POR OBRA', currentY);
+    currentY += 6;
 
-    // --- RESUMO POR OBRA (MANDATORY) ---
-    currentY += 4;
     const workSummaryMap = new Map();
     finalData.forEach(p => {
        const canonical = String(p.workName || 'Extra/Outros').trim().toUpperCase();
-       if (!workSummaryMap.has(canonical)) {
-          workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
-       }
+       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
        const w = workSummaryMap.get(canonical);
        w.mins += p.workedMinutes;
        w.cost += p.valorTotal;
@@ -723,60 +902,37 @@ function generateReciboPDF(
 
     autoTable(doc, {
       startY: currentY,
-      margin: { left: marginLeft + 5, right: marginLeft + 5 },
+      margin: { left: marginLeft, right: marginLeft },
       head: [['OBRA', 'HORAS', 'DIÁRIAS', 'VALOR']],
-      body: Array.from(workSummaryMap.values()).map(w => [
-        w.name,
-        formatarMinutos(w.mins),
-        (w.mins / MINUTES_PER_DIARIA).toFixed(2),
-        formatCurrency(w.cost)
-      ]),
+      body: [
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), (w.mins / MINUTES_PER_DIARIA).toFixed(2), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+      ],
       theme: 'grid',
-      headStyles: { fillColor: [51, 65, 85], fontSize: 8, halign: 'center' },
-      bodyStyles: { fontSize: 7, halign: 'center' },
-      alternateRowStyles: { fillColor: [250, 250, 250] },
-      columnStyles: { 
-        0: { halign: 'left' }, 
-        1: { halign: 'center' },
-        2: { halign: 'center' },
-        3: { halign: 'right', fontStyle: 'bold' } 
+      headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1 },
+      alternateRowStyles: { fillColor: [252, 252, 254] },
+      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } },
+      didParseCell: (data: any) => {
+        if (data.row.index === workSummaryMap.size) {
+            data.cell.styles.fillColor = colorBlue;
+            data.cell.styles.textColor = [255, 255, 255];
+        }
       }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 6;
-
-    // --- DETALHAMENTO DE HORAS ---
-    doc.setFontSize(9);
-    doc.setTextColor(...colorBlue);
-    doc.setFont("helvetica", "bold");
-    doc.text('DETALHAMENTO DE HORAS', marginLeft + 5, currentY);
-    currentY += 4;
+    currentY = (doc as any).lastAutoTable.finalY + 10;
+    drawSectionHeader('DETALHAMENTO DE HORAS', currentY, true);
+    currentY += 6;
 
     const sortedData = [...finalData].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.entrada || '').localeCompare(b.entrada || '');
     });
 
-    // Height check
-    const bodyRowHeight = 4.5;
-    const headHeight = 5.5;
-    const tableHeight = headHeight + (sortedData.length * bodyRowHeight);
-    const pageBottomLimit = 275;
-    const availSpace = pageBottomLimit - currentY;
-
-    if (tableHeight > availSpace && tableHeight < (pageBottomLimit - 25)) {
-        doc.addPage();
-        currentY = 20;
-        doc.setFontSize(9);
-        doc.setTextColor(...colorBlue);
-        doc.setFont("helvetica", "bold");
-        doc.text('DETALHAMENTO DE HORAS', marginLeft + 5, currentY);
-        currentY += 5;
-    }
-
     autoTable(doc, {
       startY: currentY,
-      margin: { left: marginLeft + 5, right: marginLeft + 5 },
+      margin: { left: marginLeft, right: marginLeft },
       head: [['DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
       body: sortedData.map(p => [
         new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
@@ -785,58 +941,57 @@ function generateReciboPDF(
         p.workedHoursStr,
         formatCurrency(p.valorTotal)
       ]),
-      theme: 'grid',
-      headStyles: { fillColor: [71, 85, 105], fontSize: 7, halign: 'center', cellPadding: 1.2 },
-      bodyStyles: { fontSize: sortedData.length > 35 ? 6 : 7, halign: 'center', cellPadding: 1.5 },
-      alternateRowStyles: { fillColor: [252, 252, 253] },
-      columnStyles: { 
-        0: { halign: 'center' },
-        1: { halign: 'left' },
-        2: { halign: 'center' },
-        3: { halign: 'center' },
-        4: { halign: 'right', fontStyle: 'bold' } 
-      }
+      theme: 'striped',
+      headStyles: { fillColor: colorBlue, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 7.5, halign: 'center', valign: 'middle', cellPadding: 1 },
+      columnStyles: { 0: { cellWidth: 26 }, 1: { halign: 'left' }, 2: { cellWidth: 40 }, 3: { cellWidth: 22 }, 4: { halign: 'right', fontStyle: 'bold', cellWidth: 30 } }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 10;
+    currentY = (doc as any).lastAutoTable.finalY + 12;
 
-    // TOTAL BOX
-    if (currentY > 220) { doc.addPage(); currentY = 20; }
-    doc.setFillColor(234, 88, 12, 0.05);
-    doc.setDrawColor(...colorOrange);
-    doc.roundedRect(marginLeft + 15, currentY, pageWidth - (marginLeft * 2) - 30, 35, 3, 3, 'FD');
-    doc.setFontSize(12);
-    doc.setTextColor(...colorOrange);
-    doc.text('TOTAL A PAGAR', pageWidth / 2, currentY + 10, { align: 'center' });
-    doc.setFontSize(28);
-    doc.setFont("helvetica", "bold");
-    doc.text(formatCurrency(totalCostToDisplay), pageWidth / 2, currentY + 25, { align: 'center' });
-
-    currentY += 50;
-    doc.setFontSize(9);
-    doc.setTextColor(71, 85, 105);
+    // --- 5. SIGNATURE AREA ---
+    if (currentY > 230) { doc.addPage(); currentY = 20; }
+    
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(marginLeft, currentY, totalW, 40, 2, 2, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(marginLeft, currentY, totalW, 40, 2, 2, 'D');
+    
+    doc.setFontSize(8.5);
+    doc.setTextColor(51, 65, 85);
     doc.setFont("helvetica", "normal");
     const declaration = "Declaro que recebi o valor acima discriminado, referente às horas trabalhadas no período especificado.";
-    const splitDec = doc.splitTextToSize(declaration, pageWidth - (marginLeft * 2) - 20);
-    doc.text(splitDec, pageWidth / 2, currentY, { align: 'center' });
+    const splitDec = doc.splitTextToSize(declaration, totalW - 20);
+    doc.text(splitDec, pageWidth / 2, currentY + 8, { align: 'center' });
 
-    currentY += 35;
-    doc.setDrawColor(30, 41, 59);
-    doc.line(pageWidth / 4, currentY, (pageWidth / 4) * 3, currentY);
+    doc.setDrawColor(...colorBlue);
+    doc.setLineWidth(0.5);
+    doc.line(marginLeft + 20, currentY + 28, marginLeft + totalW - 20, currentY + 28);
     doc.setFontSize(8);
-    doc.text('ASSINATURA DO FUNCIONÁRIO', pageWidth / 2, currentY + 5, { align: 'center' });
-
-    currentY += 15;
-    doc.text(`DATA: ________ / ________ / ________`, pageWidth / 2, currentY, { align: 'center' });
+    doc.setFont("helvetica", "bold");
+    doc.text('ASSINATURA DO FUNCIONÁRIO', pageWidth / 2, currentY + 34, { align: 'center' });
+    
+    doc.text(`DATA: ________ / ________ / ________`, pageWidth / 2 + 60, currentY + 34, { align: 'right' });
 
     // FOOTER (Multi-page)
     const totalPgs = (doc.internal as any).getNumberOfPages();
     for (let i = 1; i <= totalPgs; i++) {
         doc.setPage(i);
+        doc.setFillColor(...colorBlue);
+        doc.rect(0, 288, pageWidth, 9, 'F');
+        doc.setFillColor(...colorOrange);
+        doc.rect(0, 287.5, 60, 0.4, 'F');
+        
+        doc.setFontSize(7.5);
+        doc.setTextColor(255, 255, 255);
+        doc.text('A&R Engenharia | Sistema de Controle de Ponto', marginLeft, 294);
+        
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(pageWidth - marginLeft - 18, 290, 18, 5, 0.8, 0.8, 'F');
+        doc.setTextColor(...colorBlue);
         doc.setFontSize(7);
-        doc.setTextColor(...colorSlate);
-        doc.text(`Relatório gerado por A&R Engenharia | Sistema de Controle de Ponto`, marginLeft, 287);
-        doc.text(`Página ${i} de ${totalPgs}`, pageWidth - marginLeft, 287, { align: 'right' });
+        doc.setFont("helvetica", "bold");
+        doc.text(`Página ${i} de ${totalPgs}`, pageWidth - marginLeft - 9, 293.5, { align: 'center' });
     }
     
     doc.save(`Recibo_${employeeName.replace(/\s/g, '_')}_${new Date().getTime()}.pdf`);
@@ -852,9 +1007,9 @@ function generateFechamentoPDF(
   globalDiaria: number
 ) {
     const doc = new jsPDF('p', 'mm', 'a4');
-    const marginLeft = 15;
     const pageWidth = 210;
-    let currentY = 15;
+    const marginLeft = 15;
+    let currentY = 18;
     
     const colorBlue: [number, number, number] = [30, 58, 95];
     const colorOrange: [number, number, number] = [234, 88, 12];
@@ -869,214 +1024,233 @@ function generateFechamentoPDF(
     const d = filters.startDate ? new Date(filters.startDate + 'T00:00:00') : new Date();
     const periodText = `${monthNames[d.getMonth()]}/${d.getFullYear()}`;
 
-    // HEADER
+    // --- DECORATIVE ELEMENTS (HEADER) ---
     doc.setFillColor(...colorBlue);
-    doc.roundedRect(marginLeft, currentY, 12, 12, 1.5, 1.5, 'F');
-    // Accent line
+    doc.triangle(pageWidth, 0, pageWidth - 35, 0, pageWidth, 8, 'F');
     doc.setFillColor(...colorOrange);
-    doc.rect(marginLeft + 2.5, currentY + 10, 7, 0.8, 'F');
+    doc.circle(pageWidth - 1, 1, 2.5, 'F');
+
+    // --- 1. HEADER ---
+    doc.setFillColor(...colorBlue);
+    doc.roundedRect(marginLeft, currentY, 13, 13, 1.5, 1.5, 'F');
+    doc.setFillColor(...colorOrange);
+    doc.rect(marginLeft + 2.5, currentY + 10.5, 8, 1, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(7.5);
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text('A&R', marginLeft + 6, currentY + 7.5, { align: 'center' });
+    doc.text('A&R', marginLeft + 6.5, currentY + 8, { align: 'center' });
     
     doc.setTextColor(30, 41, 59);
     doc.setFontSize(14);
-    doc.text('A&R ENGENHARIA', marginLeft + 16, currentY + 5);
-    doc.setFontSize(7);
+    doc.text('A&R ENGENHARIA', marginLeft + 18, currentY + 4);
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 16, currentY + 10);
+    doc.text('SISTEMA DE CONTROLE DE PONTO', marginLeft + 18, currentY + 10);
     
-    doc.setFontSize(16);
+    currentY += 22;
+    doc.setFontSize(20);
     doc.setTextColor(...colorBlue);
     doc.setFont("helvetica", "bold");
-    doc.text('FECHAMENTO MENSAL', pageWidth / 2, currentY + 16, { align: 'center' });
+    doc.text('FECHAMENTO MENSAL', marginLeft, currentY);
+    
+    doc.setDrawColor(...colorOrange);
+    doc.setLineWidth(1.2);
+    doc.line(marginLeft, currentY + 4, marginLeft + 35, currentY + 4);
 
     doc.setFontSize(11);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(71, 85, 105);
-    doc.text(`Período: ${periodText}`, pageWidth / 2, currentY + 23, { align: 'center' });
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Período: `, marginLeft + 0, currentY + 12);
+    doc.setTextColor(...colorOrange);
+    doc.text(periodText, marginLeft + 16, currentY + 12);
 
-    currentY += 28;
-    // Section line
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.3);
-    doc.line(marginLeft, currentY, pageWidth - marginLeft, currentY);
-    currentY += 8;
+    // Gerado em area
+    doc.setFontSize(7.5);
+    doc.setTextColor(...colorSlate);
+    const now = new Date();
+    const metaIconX = pageWidth - marginLeft - 45;
+    const metaIconY = currentY - 5;
+    doc.setDrawColor(...colorBlue);
+    doc.setLineWidth(0.4);
+    doc.rect(metaIconX - 2, metaIconY - 2, 4, 4, 'D');
+    doc.line(metaIconX - 2, metaIconY - 0.5, metaIconX + 2, metaIconY - 0.5);
+    doc.circle(metaIconX + 1.2, metaIconY + 1.2, 1, 'D');
+    doc.text(`Gerado em:`, pageWidth - marginLeft, currentY - 7, { align: 'right' });
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageWidth - marginLeft, currentY - 2, { align: 'right' });
 
-    // --- 1. CARDS SUMMARY ---
-    const gridSpacing = 4;
-    const cardW = (pageWidth - (marginLeft * 2) - (gridSpacing * 2)) / 3;
-    const drawSummaryCard = (x: number, label: string, val: string, isHours = false, isGreen = false) => {
+    currentY += 18;
+
+    // --- 2. CARDS SUMMARY ---
+    const gridSpacing = 5;
+    const totalW = pageWidth - (marginLeft * 2);
+    const cardW = (totalW - (gridSpacing * 2)) / 3;
+    
+    const drawSummaryCard = (x: number, label: string, val: string, isOrange = false) => {
+      doc.setFillColor(242, 244, 247);
+      doc.roundedRect(x + 0.5, currentY + 0.5, cardW, 30, 2, 2, 'F');
       doc.setFillColor(255, 255, 255);
       doc.setDrawColor(226, 232, 240);
-      doc.roundedRect(x, currentY, cardW, 20, 1, 1, 'FD');
+      if (isOrange) doc.setDrawColor(...colorOrange);
+      doc.setLineWidth(isOrange ? 0.6 : 0.25);
+      doc.roundedRect(x, currentY, cardW, 30, 2, 2, 'FD');
       
-      doc.setFontSize(7);
+      const icX = x + cardW / 2;
+      const icY = currentY + 7;
+      doc.setFillColor(242, 245, 248);
+      doc.circle(icX, icY, 5, 'F');
+      doc.setDrawColor(...colorBlue);
+      doc.setLineWidth(0.4);
+      if (label.includes('HORAS')) {
+          doc.circle(icX, icY, 2, 'D'); doc.line(icX, icY, icX, icY - 1); doc.line(icX, icY, icX + 1, icY);
+      } else if (label.includes('DIÁRIAS')) {
+          doc.rect(icX - 1.5, icY - 1.5, 3, 3, 'D'); doc.line(icX - 1.5, icY - 0.4, icX + 1.5, icY - 0.4);
+      } else {
+          doc.setTextColor(...colorOrange);
+          doc.setFontSize(8); doc.text('$', icX, icY + 1.2, { align: 'center' });
+      }
+
+      doc.setFontSize(8);
       doc.setTextColor(...colorSlate);
       doc.setFont("helvetica", "bold");
-      doc.text(label, x + cardW / 2, currentY + 7, { align: 'center' });
+      doc.text(label, x + cardW / 2, currentY + 16, { align: 'center' });
       
-      if (isHours) {
-        doc.setFontSize(16);
-        doc.setTextColor(15, 23, 42);
-        doc.setFont("helvetica", "bold");
-        doc.setDrawColor(30, 58, 95);
-        doc.setLineWidth(0.4);
-        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
-      } else if (isGreen) {
-        doc.setFontSize(14);
-        doc.setTextColor(...colorGreen);
-        doc.setFont("helvetica", "bold");
-        doc.setDrawColor(...colorGreen);
-        doc.setLineWidth(0.4);
-        doc.line(x + 5, currentY + 16, x + cardW - 5, currentY + 16);
-      } else {
-        doc.setFontSize(11);
-        doc.setTextColor(51, 65, 85);
-        doc.setFont("helvetica", "bold");
-        doc.setDrawColor(226, 232, 240);
-        doc.setLineWidth(0.3);
-        doc.line(x + 8, currentY + 16, x + cardW - 8, currentY + 16);
-      }
-      doc.text(val, x + cardW / 2, currentY + 14, { align: 'center' });
+      doc.setFontSize(isOrange ? 16 : 14);
+      doc.setTextColor(isOrange ? colorOrange[0] : 15, isOrange ? colorOrange[1] : 23, isOrange ? colorOrange[2] : 42);
+      doc.setFont("helvetica", "bold");
+      doc.text(val, x + cardW / 2, currentY + 24, { align: 'center' });
+      
+      doc.setDrawColor(isOrange ? colorOrange[0] : 226, isOrange ? colorOrange[1] : 232, isOrange ? colorOrange[2] : 240);
+      doc.setLineWidth(0.8);
+      doc.line(x + 10, currentY + 27, x + cardW - 10, currentY + 27);
     };
 
-    drawSummaryCard(marginLeft, 'TOTAL DE HORAS', subHoursTotal, true);
+    drawSummaryCard(marginLeft, 'TOTAL DE HORAS', subHoursTotal);
     drawSummaryCard(marginLeft + cardW + gridSpacing, 'TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
-    drawSummaryCard(marginLeft + (cardW + gridSpacing) * 2, 'TOTAL GERAL', formatCurrency(totalCostToDisplay), false, true);
+    drawSummaryCard(marginLeft + (cardW + gridSpacing) * 2, 'TOTAL GERAL', formatCurrency(totalCostToDisplay), true);
 
-    currentY += 30;
+    currentY += 42;
+
+    const drawSectionHeader = (title: string, y: number, isWork = false) => {
+        doc.setFillColor(...colorBlue);
+        doc.circle(marginLeft + 3, y - 1, 3.5, 'F');
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.4);
+        const icX = marginLeft + 3;
+        const icY = y - 1;
+        if (isWork) { doc.line(icX - 1.5, icY + 1.2, icX - 1.5, icY - 0.5); doc.line(icX, icY + 1.2, icX, icY - 1.2); }
+        else { doc.circle(icX, icY - 1, 1); doc.ellipse(icX, icY + 1, 1.8, 0.8); }
+        doc.setFontSize(11);
+        doc.setTextColor(...colorBlue);
+        doc.setFont("helvetica", "bold");
+        doc.text(title, marginLeft + 8, y);
+    };
 
     // --- 2. SUMMARY BY EMPLOYEE ---
-    doc.setFontSize(11);
-    doc.setTextColor(...colorBlue);
-    doc.setFont("helvetica", "bold");
-    doc.text('RESUMO POR FUNCIONÁRIO', marginLeft, currentY);
+    drawSectionHeader('RESUMO POR FUNCIONÁRIO', currentY);
     
     const userSummaryMap = new Map();
     finalData.forEach(p => {
-       if(!userSummaryMap.has(p.userId)) {
-          userSummaryMap.set(p.userId, { name: p.userName || '---', mins: 0, cost: 0 });
-       }
+       if(!userSummaryMap.has(p.userId)) userSummaryMap.set(p.userId, { name: p.userName || '---', mins: 0, cost: 0 });
        const u = userSummaryMap.get(p.userId);
        u.mins += p.workedMinutes;
        u.cost += p.valorTotal;
     });
 
     autoTable(doc, {
-      startY: currentY + 3,
+      startY: currentY + 5,
       margin: { left: marginLeft, right: marginLeft },
       head: [['FUNCIONÁRIO', 'HORAS', 'DIÁRIAS', 'TOTAL']],
-      body: Array.from(userSummaryMap.values()).map(u => [
-         u.name,
-         formatarMinutos(u.mins),
-         (u.mins / MINUTES_PER_DIARIA).toFixed(2),
-         formatCurrency(u.cost)
-      ]),
+      body: Array.from(userSummaryMap.values()).map(u => [u.name, formatarMinutos(u.mins), (u.mins / MINUTES_PER_DIARIA).toFixed(2), formatCurrency(u.cost)]),
       theme: 'grid',
-      headStyles: { fillColor: colorBlue, fontSize: 9.5, halign: 'center', cellPadding: 1.5 },
-      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.5 },
+      headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 9, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1.5 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 
-        0: { halign: 'left' },
-        1: { halign: 'center' },
-        2: { halign: 'center' },
-        3: { halign: 'right', fontStyle: 'bold' } 
-      }
+      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 8;
+    currentY = (doc as any).lastAutoTable.finalY + 10;
 
     // --- 3. SUMMARY BY WORK ---
-    doc.setFontSize(11);
-    doc.setTextColor(...colorBlue);
-    doc.setFont("helvetica", "bold");
-    doc.text('RESUMO POR OBRA', marginLeft, currentY);
+    drawSectionHeader('RESUMO POR OBRA', currentY, true);
     
     const workSummaryMap = new Map();
     finalData.forEach(p => {
        const canonical = String(p.workName || 'EXTRA/OUTROS').trim().toUpperCase();
-       if (!workSummaryMap.has(canonical)) {
-          workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
-       }
+       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
        const w = workSummaryMap.get(canonical);
        w.mins += p.workedMinutes;
        w.cost += p.valorTotal;
     });
 
     autoTable(doc, {
-      startY: currentY + 4,
+      startY: currentY + 5,
       margin: { left: marginLeft, right: marginLeft },
       head: [['OBRA', 'HORAS', 'DIÁRIAS', 'TOTAL']],
-      body: Array.from(workSummaryMap.values()).map(w => [
-         w.name,
-         formatarMinutos(w.mins),
-         (w.mins / MINUTES_PER_DIARIA).toFixed(2),
-         formatCurrency(w.cost)
-      ]),
+      body: [
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), (w.mins / MINUTES_PER_DIARIA).toFixed(2), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+      ],
       theme: 'grid',
-      headStyles: { fillColor: [51, 65, 85], fontSize: 9.5, halign: 'center', cellPadding: 1.2 },
-      bodyStyles: { fontSize: 8.5, halign: 'center', textColor: [30, 41, 59], cellPadding: 1.4 },
+      headStyles: { fillColor: [51, 65, 85], fontSize: 9, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1.5 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 
-        0: { halign: 'left' },
-        1: { halign: 'center' },
-        2: { halign: 'center' },
-        3: { halign: 'right', fontStyle: 'bold' } 
+      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } },
+      didParseCell: (data) => {
+        if (data.row.index === workSummaryMap.size) {
+            data.cell.styles.fillColor = colorBlue;
+            data.cell.styles.textColor = [255, 255, 255];
+        }
       }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 20;
+    currentY = (doc as any).lastAutoTable.finalY + 15;
 
     // --- 4. FINANCIAL SUMMARY BLOCK ---
-    if(currentY > 220) {
-      doc.addPage();
-      currentY = 20;
-    }
-
+    if(currentY > 220) { doc.addPage(); currentY = 20; }
+    
+    drawSectionHeader('RESUMO FINANCEIRO', currentY);
+    currentY += 8;
+    
+    const finW = totalW;
+    const colW = finW / 3;
     doc.setFillColor(248, 250, 252);
+    doc.roundedRect(marginLeft, currentY, finW, 30, 2, 2, 'F');
     doc.setDrawColor(226, 232, 240);
-    doc.roundedRect(pageWidth / 2 - 10, currentY, pageWidth / 2 - marginLeft + 10, 38, 2, 2, 'FD');
-    
-    // Icon circle decoration
-    doc.setFillColor(22, 163, 74, 0.1);
-    doc.setDrawColor(22, 163, 74);
-    doc.circle(pageWidth / 2 + 10, currentY + 19, 8, 'FD');
-    doc.setTextColor(22, 163, 74);
-    doc.setFontSize(10);
-    doc.text('$', pageWidth / 2 + 10, currentY + 22, { align: 'center' });
+    doc.roundedRect(marginLeft, currentY, finW, 30, 2, 2, 'D');
 
-    const finX = pageWidth / 2 + 25;
-    const finValX = pageWidth - marginLeft - 6;
-    
-    doc.setFontSize(8);
-    doc.setTextColor(...colorSlate);
-    doc.setFont("helvetica", "bold");
-    doc.text('RESUMO FINANCEIRO', finX, currentY + 6);
-    
-    const drawFinRow = (y: number, label: string, val: string, isBig = false) => {
-       doc.setFontSize(isBig ? 12 : 9);
-       doc.setTextColor(30, 41, 59);
-       doc.setFont("helvetica", "normal");
-       doc.text(label, finX, y);
-       doc.setFont("helvetica", "bold");
-       if(isBig) doc.setTextColor(22, 163, 74);
-       doc.text(val, finValX, y, { align: 'right' });
+    const drawFinBlock = (x: number, label: string, val: string, isLast = false) => {
+        doc.setFillColor(...colorBlue); doc.circle(x + 10, currentY + 8, 3, 'F'); doc.setDrawColor(255); doc.setLineWidth(0.3);
+        if (label.includes('DIÁRIA BASE')) doc.rect(x + 9, currentY + 7, 2, 2, 'D');
+        else if (label.includes('TOTAL DE DIÁRIAS')) doc.rect(x + 8.5, currentY + 6.5, 3, 3, 'D');
+        else { doc.setTextColor(...colorOrange); doc.setFontSize(6); doc.text('$', x + 10, currentY + 10.5); }
+        
+        doc.setFontSize(7.5); doc.setTextColor(...colorSlate); doc.setFont("helvetica", "bold");
+        doc.text(label, x + 16, currentY + 9);
+        doc.setFontSize(11); doc.setTextColor(isLast ? colorOrange[0] : 15, isLast ? colorOrange[1] : 23, isLast ? colorOrange[2] : 42);
+        doc.text(val, x + 16, currentY + 20);
+        
+        if (!isLast) { doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.2); doc.line(x + colW, currentY + 5, x + colW, currentY + 25); }
     };
-
-    drawFinRow(currentY + 14, 'Valor da diária base:', formatCurrency(globalDiaria));
-    drawFinRow(currentY + 22, 'Total de diárias:', subDiariasTotal.toFixed(2));
-    drawFinRow(currentY + 33, 'Total geral a pagar:', formatCurrency(totalCostToDisplay), true);
+    
+    drawFinBlock(marginLeft, 'VALOR DA DIÁRIA BASE', formatCurrency(globalDiaria));
+    drawFinBlock(marginLeft + colW, 'TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
+    drawFinBlock(marginLeft + colW * 2, 'TOTAL GERAL A PAGAR', formatCurrency(totalCostToDisplay), true);
 
     // FOOTER
     const totalPg = (doc.internal as any).getNumberOfPages();
     for (let i = 1; i <= totalPg; i++) {
         doc.setPage(i);
-        doc.setFontSize(6);
-        doc.setTextColor(...colorSlate);
-        doc.text(`A&R Engenharia | Fechamento Mensal | Gerado em ${new Date().toLocaleDateString('pt-BR')}`, marginLeft, 287);
-        doc.text(`Página ${i} de ${totalPg}`, pageWidth - marginLeft, 287, { align: 'right' });
+        doc.setFillColor(...colorBlue);
+        doc.rect(0, 288, pageWidth, 9, 'F');
+        doc.setFillColor(...colorOrange);
+        doc.rect(0, 287.5, 60, 0.4, 'F');
+        doc.setFontSize(7.5); doc.setTextColor(255, 255, 255);
+        doc.text(`A&R Engenharia | Fechamento Mensal`, marginLeft, 294);
+        doc.setFillColor(255, 255, 255); doc.roundedRect(pageWidth - marginLeft - 18, 290, 18, 5, 0.8, 0.8, 'F');
+        doc.setTextColor(...colorBlue); doc.setFontSize(7); doc.setFont("helvetica", "bold");
+        doc.text(`Página ${i} de ${totalPg}`, pageWidth - marginLeft - 9, 293.5, { align: 'center' });
     }
 
     doc.save(`Fechamento_${periodText.replace('/', '_')}.pdf`);
@@ -1949,15 +2123,15 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
         }
       });
 
-      // 4. Incomplete hours (< 9h)
+      // 4. Incomplete hours (< 10h)
       let incompleteCount = 0;
       userMinutesMap.forEach((minutes) => {
-        if (minutes < 9 * 60) {
+        if (minutes < 10 * 60) {
           incompleteCount++;
         }
       });
       if (incompleteCount > 0) {
-        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 9h trabalhadas`);
+        alerts.push(`⚠ ${incompleteCount} funcionário${incompleteCount > 1 ? 's' : ''} com menos de 10h trabalhadas`);
       }
 
       setDashboardData({
@@ -4142,53 +4316,36 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         </div>
       </Card>
 
-      <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar Relatório Oficial (${exportType === 'pdf' ? 'PDF' : 'Excel'})`}>
-        <div className="space-y-4">
-          {exportType === 'pdf' && (
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tipo de Documento</label>
-              <select 
-                value={pdfDocType} 
-                onChange={e => setPdfDocType(e.target.value as any)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
-              >
-                <option value="gerencial">Relatório Gerencial</option>
-                <option value="recibo">Recibo Individual</option>
-                <option value="fechamento">Fechamento Mensal</option>
-              </select>
-            </div>
-          )}
-          <Input 
-            label="Valor da Diária (R$)"
-            type="number" 
-            value={globalDiariaValue} 
-            onChange={e => setGlobalDiariaValue(e.target.value)} 
-            placeholder="Ex: 180"
-            required 
-          />
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Modo de Cálculo</label>
-             <select 
-                value={calcMode} 
-                onChange={e => setCalcMode(e.target.value as any)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-100 font-bold"
-              >
-                <option value="auto">Automático (por horas)</option>
-                <option value="diaria">Por diária</option>
-                <option value="manual">Valor final manual (opcional)</option>
-            </select>
-          </div>
-          {calcMode === 'manual' && (
+      <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar Relatório (${exportType === 'pdf' ? 'PDF' : 'Excel'})`}>
+        <div className="p-4 space-y-8 flex flex-col items-center max-w-sm mx-auto">
+          <div className="w-full space-y-6">
+            {exportType === 'pdf' && (
+              <div className="space-y-2.5">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] ml-1">Tipo de Documento</label>
+                <select 
+                  value={pdfDocType} 
+                  onChange={e => setPdfDocType(e.target.value as any)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4 text-slate-100 font-bold text-base focus:ring-2 focus:ring-blue-500/20 transition-all cursor-pointer hover:border-slate-600 outline-none"
+                >
+                  <option value="gerencial">Relatório Gerencial</option>
+                  <option value="recibo">Recibo Individual</option>
+                  <option value="fechamento">Fechamento Mensal</option>
+                </select>
+              </div>
+            )}
+            
             <Input 
-              label="Valor Final Manual (R$)"
+              label="Valor da Diária (R$)"
               type="number" 
-              value={manualFinalValue} 
-              onChange={e => setManualFinalValue(e.target.value)} 
+              value={globalDiariaValue} 
+              onChange={e => setGlobalDiariaValue(e.target.value)} 
+              placeholder="Ex: 180"
               required 
             />
-          )}
-          <div className="pt-4">
-            <Button onClick={handleOfficialExport} className="w-full py-3">
+          </div>
+
+          <div className="w-full pt-2">
+            <Button onClick={handleOfficialExport} className="w-full py-4 text-base font-black uppercase tracking-widest shadow-xl shadow-blue-900/10 active:scale-[0.98] transition-all bg-blue-600 hover:bg-blue-500">
                {exportType === 'pdf' ? 'Gerar PDF Oficial' : 'Exportar Excel'}
             </Button>
           </div>
