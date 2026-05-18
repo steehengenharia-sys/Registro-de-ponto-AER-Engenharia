@@ -1391,6 +1391,42 @@ interface PointRecord {
   entrada2?: PointSegmentRecord;
   saida2?: PointSegmentRecord;
 
+  // Legacy flat fields
+  entrada1_lat?: number;
+  entrada1_lng?: number;
+  entrada1_acc?: number;
+  entrada1_dist?: number;
+  entrada1_gps_suspeito?: number;
+  entrada1_gps_status?: string;
+  entrada1_obra?: string;
+
+  saida1_lat?: number;
+  saida1_lng?: number;
+  saida1_acc?: number;
+  saida1_dist?: number;
+  saida1_gps_suspeito?: number;
+  saida1_gps_status?: string;
+
+  entrada2_lat?: number;
+  entrada2_lng?: number;
+  entrada2_acc?: number;
+  entrada2_dist?: number;
+  entrada2_gps_suspeito?: number;
+  entrada2_gps_status?: string;
+  entrada2_obra?: string;
+
+  saida2_lat?: number;
+  saida2_lng?: number;
+  saida2_acc?: number;
+  saida2_dist?: number;
+  saida2_gps_suspeito?: number;
+  saida2_gps_status?: string;
+
+  work_name?: string;
+  work_id?: string;
+  editado_manual?: number;
+  encerrado?: number;
+
   obs: string;
   observations?: { etapa: string; texto: string; timestamp: number }[];
   total_hours: string;
@@ -3126,11 +3162,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 funcionario_id: userObj ? String(userObj.id) : '0',
                 user_name: name,
                 date: dateStr,
-                entrada1: '--:--', saida1: '--:--', entrada2: '--:--', saida2: '--:--',
-                entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
-                saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
-                entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
-                saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
+                entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0,
+                saida1_lat: 0, saida1_lng: 0, saida1_acc: 0,
+                entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0,
+                saida2_lat: 0, saida2_lng: 0, saida2_acc: 0,
                 obs: `Importado da planilha - Obra: ${work}`,
                 total_hours: '00:00',
                 status: WorkStatus.NAO_INICIADO,
@@ -3141,10 +3176,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
             let changed = false;
 
-            if (times[0] && (!point.entrada1 || point.entrada1 === '--:--')) { point.entrada1 = times[0]; changed = true; }
-            if (times[1] && (!point.saida1 || point.saida1 === '--:--')) { point.saida1 = times[1]; changed = true; }
-            if (times[2] && (!point.entrada2 || point.entrada2 === '--:--')) { point.entrada2 = times[2]; changed = true; }
-            if (times[3] && (!point.saida2 || point.saida2 === '--:--')) { point.saida2 = times[3]; changed = true; }
+            if (times[0] && (!point.entrada1 || getHorarioDisplay(point.entrada1) === '--:--')) { point.entrada1 = { horario: times[0], obraId: '', obraNome: work, observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } }; changed = true; }
+            if (times[1] && (!point.saida1 || getHorarioDisplay(point.saida1) === '--:--')) { point.saida1 = { horario: times[1], obraId: '', obraNome: work, observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } }; changed = true; }
+            if (times[2] && (!point.entrada2 || getHorarioDisplay(point.entrada2) === '--:--')) { point.entrada2 = { horario: times[2], obraId: '', obraNome: work, observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } }; changed = true; }
+            if (times[3] && (!point.saida2 || getHorarioDisplay(point.saida2) === '--:--')) { point.saida2 = { horario: times[3], obraId: '', obraNome: work, observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } }; changed = true; }
 
             if (changed) {
               point.total_hours = calculateRecordMetrics(point).workedHours;
@@ -3191,20 +3226,20 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         funcionario_id: String(manualFormData.user_id),
         user_name: userObj?.name || '---',
         date: manualFormData.date,
-        entrada1: manualFormData.entrada1,
-        saida1: manualFormData.saida1,
-        entrada2: manualFormData.entrada2,
-        saida2: manualFormData.saida2,
+        entrada1: typeof manualFormData.entrada1 === 'string' ? { horario: manualFormData.entrada1, obraId: '', obraNome: manualFormData.entrada1_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.entrada1,
+        saida1: typeof manualFormData.saida1 === 'string' ? { horario: manualFormData.saida1, obraId: '', obraNome: manualFormData.entrada1_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.saida1,
+        entrada2: typeof manualFormData.entrada2 === 'string' ? { horario: manualFormData.entrada2, obraId: '', obraNome: manualFormData.entrada2_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.entrada2,
+        saida2: typeof manualFormData.saida2 === 'string' ? { horario: manualFormData.saida2, obraId: '', obraNome: manualFormData.entrada2_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.saida2,
         entrada1_obra: manualFormData.entrada1_obra,
         entrada2_obra: manualFormData.entrada2_obra,
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
         status: manualFormData.manual_status || WorkStatus.NAO_INICIADO,
-        entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
-        saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
-        entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
-        saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
+        entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0,
+        saida1_lat: 0, saida1_lng: 0, saida1_acc: 0,
+        entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0,
+        saida2_lat: 0, saida2_lng: 0, saida2_acc: 0,
       };
 
       const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0);
@@ -4693,13 +4728,50 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 
       // 2. Perform location lookup
       let pos: GeolocationPosition | null = null;
-      if (customPos) pos = customPos;
-      else {
+      if (customPos) {
+        pos = customPos;
+      } else {
         try {
           pos = await new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 });
+            let watchId: number;
+            let timeoutId: any;
+            let bestPos: GeolocationPosition | null = null;
+            
+            const finish = (finalPos: GeolocationPosition | null, err?: any) => {
+              if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
+              if (timeoutId !== undefined) clearTimeout(timeoutId);
+              if (finalPos) resolve(finalPos);
+              else reject(err || new Error('Location not found'));
+            };
+
+            timeoutId = setTimeout(() => {
+              finish(bestPos, new Error('Timeout waiting for better accuracy'));
+            }, 15000); // 15s max timeout
+
+            watchId = navigator.geolocation.watchPosition(
+              (p) => {
+                bestPos = p;
+                if (p.coords.accuracy <= 50) { // If accuracy is 50m or better, we are good
+                  finish(p);
+                }
+              },
+              (err) => {
+                if (!bestPos) finish(null, err); // Only reject if we don't have ANY position yet
+              },
+              { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+            );
           });
-        } catch (e) { console.error("Geo error", e); }
+        } catch (e) {
+          console.error("Geo error (high accuracy)", e);
+          // Try a simple fallback without high accuracy just in case
+          try {
+            pos = await new Promise((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+            });
+          } catch (fallbackErr) {
+            console.error("Geo fallback error", fallbackErr);
+          }
+        }
       }
 
       let address = "Localização não obtida";
@@ -4727,37 +4799,70 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         }
       };
 
+      let dist: number | undefined;
+      let suspeito = 0;
+      let gpsStatus = 'desconhecido';
+
+      if (pos && selectedWork?.lat && selectedWork?.lng) {
+        dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, selectedWork.lat, selectedWork.lng);
+        gpsStatus = pos.coords.accuracy > 300 ? 'fraco' : 'preciso';
+        if (selectedWork.radius && dist > selectedWork.radius) suspeito = 1;
+      }
+
       if (type === 'entrada1') {
         pointData.entrada1 = segment;
+        pointData.entrada1_lat = segment.gps.lat;
+        pointData.entrada1_lng = segment.gps.lng;
+        pointData.entrada1_acc = segment.gps.acc;
+        pointData.entrada1_obra = segment.obraNome;
+        if (dist !== undefined) pointData.entrada1_dist = dist;
+        pointData.entrada1_gps_suspeito = suspeito;
+        pointData.entrada1_gps_status = gpsStatus;
       } else if (type === 'saida1') {
         pointData.saida1 = segment;
+        pointData.saida1_lat = segment.gps.lat;
+        pointData.saida1_lng = segment.gps.lng;
+        pointData.saida1_acc = segment.gps.acc;
+        if (dist !== undefined) pointData.saida1_dist = dist;
+        pointData.saida1_gps_suspeito = suspeito;
+        pointData.saida1_gps_status = gpsStatus;
       } else if (type === 'entrada2') {
         pointData.entrada2 = segment;
+        pointData.entrada2_lat = segment.gps.lat;
+        pointData.entrada2_lng = segment.gps.lng;
+        pointData.entrada2_acc = segment.gps.acc;
+        pointData.entrada2_obra = segment.obraNome;
+        if (dist !== undefined) pointData.entrada2_dist = dist;
+        pointData.entrada2_gps_suspeito = suspeito;
+        pointData.entrada2_gps_status = gpsStatus;
       } else if (type === 'saida2') {
         pointData.saida2 = segment;
+        pointData.saida2_lat = segment.gps.lat;
+        pointData.saida2_lng = segment.gps.lng;
+        pointData.saida2_acc = segment.gps.acc;
+        if (dist !== undefined) pointData.saida2_dist = dist;
+        pointData.saida2_gps_suspeito = suspeito;
+        pointData.saida2_gps_status = gpsStatus;
       }
       
       pointData.last_timestamp = Date.now();
       pointData.status = pointData.status || WorkStatus.TRABALHANDO_1;
       
-// --- Sanitization moved to top level ---
-      // 4. Save to Firestore
-      await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
-      console.log("Ponto salvo com sucesso no ID:", docId);
-      
       if (obs.trim()) {
         const newObs = { etapa: type, texto: obs.trim(), timestamp: Date.now(), user_name: user.name };
-        
         const currentObs = pointData.obs || '';
         const labels: Record<string, string> = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
         const labelContext = labels[type] || type;
         const updatedObs = currentObs ? `${currentObs} | [${labelContext}] ${obs.trim()}` : `[${labelContext}] ${obs.trim()}`;
 
-        await updateDoc(pointRef, {
-          observations: arrayUnion(newObs),
-          obs: updatedObs
-        });
+        pointData.obs = updatedObs;
+        if (!pointData.observations) pointData.observations = [];
+        pointData.observations.push(newObs);
       }
+
+      // 4. Save to Firestore
+      await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
+      console.log("Ponto salvo com sucesso no ID:", docId);
       
       setObs('');
 
