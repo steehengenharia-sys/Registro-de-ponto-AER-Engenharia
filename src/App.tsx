@@ -40,7 +40,25 @@ import * as XLSX from 'xlsx';
 
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy, arrayUnion } from 'firebase/firestore';
+
+// --- Global Utilities ---
+export const sanitizePointData = (data: any): any => {
+  if (data === null || typeof data !== 'object') return data;
+  const sanitized = Array.isArray(data) ? [] : {};
+  
+  Object.keys(data).forEach(key => {
+    const value = data[key];
+    if (value !== undefined) {
+      if (typeof value === 'object' && value !== null) {
+        (sanitized as any)[key] = sanitizePointData(value);
+      } else {
+        (sanitized as any)[key] = value;
+      }
+    }
+  });
+  return sanitized;
+};
 
 function exportarBackup(dados: any) {
 
@@ -64,16 +82,22 @@ function exportarBackup(dados: any) {
 const storage = {
   getUsers: async (userId?: string): Promise<UserData[]> => {
     try {
-      let q = collection(db, 'users') as any;
       if (userId) {
-        q = query(collection(db, 'users'), where('id', '==', userId));
+        // Use getDoc for single user instead of query
+        const docSnap = await getDoc(doc(db, 'users', userId));
+        if (docSnap.exists()) {
+          return [{ id: docSnap.id, ...docSnap.data() } as UserData];
+        }
+        return [];
+      } else {
+        // Use getDocs for list (only allowed for admins)
+        const querySnapshot = await getDocs(collection(db, 'users'));
+        const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as object) } as UserData));
+        
+        return users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       }
-      const querySnapshot = await getDocs(q);
-      const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as object) } as UserData));
-      
-      return users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
-      handleFirestoreError(e, OperationType.LIST, 'users');
+      handleFirestoreError(e, userId ? OperationType.GET : OperationType.LIST, userId ? 'users/'+userId : 'users');
       return [];
     }
   },
@@ -152,7 +176,7 @@ const storage = {
     // but for now let's keep it simple and just add a savePoint for single updates
     for (const point of points) {
       try {
-        await setDoc(doc(db, 'points', String(point.id)), point);
+        await setDoc(doc(db, 'points', String(point.id)), sanitizePointData(point));
       } catch (e) {
         handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
       }
@@ -160,7 +184,7 @@ const storage = {
   },
   savePoint: async (point: PointRecord) => {
     try {
-      await setDoc(doc(db, 'points', String(point.id)), point);
+      await setDoc(doc(db, 'points', String(point.id)), sanitizePointData(point));
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
     }
@@ -253,8 +277,8 @@ function somarHoras(listaDeHoras: string[]): string {
 const MINUTES_PER_DIARIA = 600; // 10h
 
 function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0) {
-  const p1 = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
-  const p2 = calcularPeriodo(p.entrada2 || '', p.saida2 || '');
+  const p1 = calcularPeriodo(p.entrada1?.horario || '', p.saida1?.horario || '');
+  const p2 = calcularPeriodo(p.entrada2?.horario || '', p.saida2?.horario || '');
   const totalMinutos = p1 + p2;
   
   const baseDiaria = valorDiaria || 180;
@@ -279,8 +303,8 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
     const userName = p.user_name || user?.name || '-';
     
     // Intervalo 1
-    const p1Mins = calcularPeriodo(p.entrada1 || '', p.saida1 || '');
-    if (p.entrada1 && p1Mins > 0) {
+    const p1Mins = calcularPeriodo(p.entrada1?.horario || '', p.saida1?.horario || '');
+    if (p.entrada1?.horario && p1Mins > 0) {
       const valorTotal = (p1Mins / MINUTES_PER_DIARIA) * baseDiaria;
 
       let w1Id = p.entrada1_obra || p.work_name || p.work_id;
@@ -297,8 +321,8 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
         userId: p.user_id,
         userName,
         workName: w1Name,
-        entrada: p.entrada1,
-        saida: p.saida1,
+        entrada: getHorarioDisplay(p.entrada1),
+        saida: getHorarioDisplay(p.saida1),
         workedMinutes: p1Mins,
         workedHoursStr: formatarMinutos(p1Mins),
         diarias: p1Mins / MINUTES_PER_DIARIA,
@@ -307,8 +331,8 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
     }
 
     // Intervalo 2
-    const p2Mins = calcularPeriodo(p.entrada2 || '', p.saida2 || '');
-    if (p.entrada2 && p2Mins > 0) {
+    const p2Mins = calcularPeriodo(getHorarioDisplay(p.entrada2), getHorarioDisplay(p.saida2));
+    if (getHorarioDisplay(p.entrada2) !== '--:--' && p2Mins > 0) {
       const valorTotal = (p2Mins / MINUTES_PER_DIARIA) * baseDiaria;
 
       let w2Id = p.entrada2_obra || p.entrada1_obra || p.work_name || p.work_id; 
@@ -325,8 +349,8 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
         userId: p.user_id,
         userName,
         workName: w2Name,
-        entrada: p.entrada2,
-        saida: p.saida2,
+        entrada: getHorarioDisplay(p.entrada2),
+        saida: getHorarioDisplay(p.saida2),
         workedMinutes: p2Mins,
         workedHoursStr: formatarMinutos(p2Mins),
         diarias: p2Mins / MINUTES_PER_DIARIA,
@@ -1333,42 +1357,100 @@ interface Work {
 }
 
 enum WorkStatus {
-  NAO_INICIADO = 'Não Iniciado',
-  TRABALHANDO = 'Trabalhando',
-  PAUSADO = 'Pausado',
-  ENCERRADO = 'Encerrado'
+  NAO_INICIADO = 'NAO_INICIADO',
+  TRABALHANDO_1 = 'TRABALHANDO_1',
+  PAUSADO = 'PAUSADO',
+  TRABALHANDO_2 = 'TRABALHANDO_2',
+  TRABALHANDO = 'TRABALHANDO',
+  ENCERRADO = 'ENCERRADO'
+}
+
+interface PointSegmentRecord {
+  horario: string;
+  obraId: string;
+  obraNome: string;
+  observacao: string;
+  gps: {
+    lat: number;
+    lng: number;
+    acc: number;
+    address: string;
+  };
 }
 
 interface PointRecord {
-  id: string | number;
+  id: string;
   user_id: string;
   funcionario_id?: string;
   user_name?: string;
-  work_id?: string;
-  work_name?: string;
-  entrada1_obra?: string;
-  entrada2_obra?: string;
   date: string;
-  entrada1: string; saida1: string; entrada2: string; saida2: string;
-  entrada1_lat: number; entrada1_lng: number; entrada1_acc: number; entrada1_address: string;
-  saida1_lat: number; saida1_lng: number; saida1_acc: number; saida1_address: string;
-  entrada2_lat: number; entrada2_lng: number; entrada2_acc: number; entrada2_address: string;
-  saida2_lat: number; saida2_lng: number; saida2_acc: number; saida2_address: string;
-  entrada1_dist?: number; entrada1_gps_status?: string;
-  saida1_dist?: number; saida1_gps_status?: string;
-  entrada2_dist?: number; entrada2_gps_status?: string;
-  saida2_dist?: number; saida2_gps_status?: string;
-  entrada1_gps_suspeito?: number;
-  saida1_gps_suspeito?: number;
-  entrada2_gps_suspeito?: number;
-  saida2_gps_suspeito?: number;
-  obs: string;
-  total_hours: string;
-  editado_manual?: number;
-  encerrado?: number;
-  last_timestamp?: number;
   status: WorkStatus;
+  
+  entrada1?: PointSegmentRecord;
+  saida1?: PointSegmentRecord;
+  entrada2?: PointSegmentRecord;
+  saida2?: PointSegmentRecord;
+
+  obs: string;
+  observations?: { etapa: string; texto: string; timestamp: number }[];
+  total_hours: string;
+  last_timestamp?: number;
 }
+
+// --- Data Adaptation ---
+
+export const getHorarioDisplay = (val: any): string => {
+  if (typeof val === 'string') return val || '--:--';
+  if (val && typeof val === 'object' && val.horario) return val.horario;
+  return '--:--';
+};
+
+export const getObraDisplay = (val: any, legacyFallback?: string): string => {
+  if (val && typeof val === 'object' && val.obraNome) return val.obraNome;
+  if (typeof val === 'string') return val;
+  return legacyFallback || 'Não informada';
+};
+
+const adaptLegacyPoint = (data: any): PointRecord => {
+  if (data.entrada1 && typeof data.entrada1 === 'object') {
+     return data;
+  }
+
+  const newP: PointRecord = {
+    ...data,
+    status: data.status || WorkStatus.NAO_INICIADO,
+    entrada1: {
+      horario: data.entrada1 || '',
+      obraId: data.entrada1_obra || data.work_id || '',
+      obraNome: data.entrada1_obra_nome || data.work_name || '',
+      observacao: '',
+      gps: { lat: data.entrada1_lat || 0, lng: data.entrada1_lng || 0, acc: data.entrada1_acc || 0, address: data.entrada1_address || '' }
+    },
+    // Repeat for other segments saia1, entrada2, saida2
+    saida1: {
+      horario: data.saida1 || '',
+      obraId: data.saida1_obra || '',
+      obraNome: data.saida1_obra_nome || '',
+      observacao: '',
+      gps: { lat: data.saida1_lat || 0, lng: data.saida1_lng || 0, acc: data.saida1_acc || 0, address: data.saida1_address || '' }
+    },
+    entrada2: {
+      horario: data.entrada2 || '',
+      obraId: data.entrada2_obra || '',
+      obraNome: data.entrada2_obra_nome || '',
+      observacao: '',
+      gps: { lat: data.entrada2_lat || 0, lng: data.entrada2_lng || 0, acc: data.entrada2_acc || 0, address: data.entrada2_address || '' }
+    },
+    saida2: {
+      horario: data.saida2 || '',
+      obraId: data.saida2_obra || '',
+      obraNome: data.saida2_obra_nome || '',
+      observacao: '',
+      gps: { lat: data.saida2_lat || 0, lng: data.saida2_lng || 0, acc: data.saida2_acc || 0, address: data.saida2_address || '' }
+    }
+  };
+  return newP;
+};
 
 // --- Status Management Functions ---
 const setStatus = (p: PointRecord, newStatus: WorkStatus) => {
@@ -1420,10 +1502,10 @@ const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
 
 const getPointStatus = (p: PointRecord | null) => {
   const status = calculateWorkStatus(p);
-  if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: p?.saida2 || p?.saida1 || '--:--', color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
-  if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: p?.saida1 || '--:--', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
-  if (status === WorkStatus.TRABALHANDO) {
-    const since = (p?.entrada2 && p?.saida1) ? p.entrada2 : (p?.entrada1 || '--:--');
+  if (status === WorkStatus.ENCERRADO) return { label: 'Encerrado', since: getHorarioDisplay(p?.saida2) !== '--:--' ? getHorarioDisplay(p?.saida2) : getHorarioDisplay(p?.saida1), color: 'text-slate-400', bg: 'bg-slate-800', border: 'border-slate-700' };
+  if (status === WorkStatus.PAUSADO) return { label: 'Pausado', since: getHorarioDisplay(p?.saida1), color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+  if (status === WorkStatus.TRABALHANDO || status === WorkStatus.TRABALHANDO_1 || status === WorkStatus.TRABALHANDO_2) {
+    const since = (getHorarioDisplay(p?.entrada2) !== '--:--' && getHorarioDisplay(p?.saida1) !== '--:--') ? getHorarioDisplay(p?.entrada2) : getHorarioDisplay(p?.entrada1);
     return { label: 'Trabalhando', since, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
   }
   return { label: 'Não iniciado', since: '--:--', color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
@@ -2261,12 +2343,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-2 text-slate-400">
                           <Building2 size={12} className="text-slate-600" />
                           <span className="text-xs font-medium">
-                            {p.entrada2_obra || p.entrada1_obra || p.work_name || '---'}
+                            {getObraDisplay(p.entrada2) !== 'Não informada' ? getObraDisplay(p.entrada2) : getObraDisplay(p.entrada1, p.work_name || '---')}
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.entrada1 || '--:--'}</td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{p.saida2 || p.saida1 || '--:--'}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{getHorarioDisplay(p.entrada1)}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-300 text-center">{getHorarioDisplay(p.saida2) !== '--:--' ? getHorarioDisplay(p.saida2) : getHorarioDisplay(p.saida1)}</td>
                       <td className="px-6 py-4 text-right">
                         <span className="text-sm font-black text-white">
                           {p.total_hours}
@@ -2313,7 +2395,7 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-1.5 text-slate-400 mt-0.5">
                           <Building2 size={12} className="text-slate-500" />
                           <span className="text-xs font-medium truncate max-w-[150px]">
-                            {p.entrada2_obra || p.entrada1_obra || p.work_name || '---'}
+                            {getObraDisplay(p.entrada2) !== 'Não informada' ? getObraDisplay(p.entrada2) : getObraDisplay(p.entrada1, p.work_name || '---')}
                           </span>
                         </div>
                       </div>
@@ -2329,12 +2411,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                     <div className="flex items-center gap-4">
                       <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Entrada</p>
-                        <p className="text-sm font-bold text-white">{p.entrada1 || '--:--'}</p>
+                        <p className="text-sm font-bold text-white">{getHorarioDisplay(p.entrada1)}</p>
                       </div>
                       <div className="w-4 border-t border-slate-600"></div>
                       <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Saída</p>
-                        <p className="text-sm font-bold text-white">{p.saida2 || p.saida1 || '--:--'}</p>
+                        <p className="text-sm font-bold text-white">{getHorarioDisplay(p.saida2) !== '--:--' ? getHorarioDisplay(p.saida2) : getHorarioDisplay(p.saida1)}</p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -2818,10 +2900,10 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PointHistoryItem label="Entrada 1" time={p.entrada1} obra={p.entrada1_obra || p.work_name} />
-              <PointHistoryItem label="Saída 1" time={p.saida1} />
-              <PointHistoryItem label="Entrada 2" time={p.entrada2} obra={p.entrada2_obra || p.entrada1_obra || p.work_name} />
-              <PointHistoryItem label="Saída 2" time={p.saida2} />
+              <PointHistoryItem label="Entrada 1" time={p.entrada1?.horario || '--:--'} obra={p.entrada1?.obraNome || p.work_name} />
+              <PointHistoryItem label="Saída 1" time={p.saida1?.horario || '--:--'} obra={p.saida1?.obraNome} />
+              <PointHistoryItem label="Entrada 2" time={p.entrada2?.horario || '--:--'} obra={p.entrada2?.obraNome || p.entrada1?.obraNome || p.work_name} />
+              <PointHistoryItem label="Saída 2" time={p.saida2?.horario || '--:--'} obra={p.saida2?.obraNome} />
             </div>
           </Card>
         ))}
@@ -3603,15 +3685,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-sm font-medium text-slate-300">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
-                    <p className="text-sm font-bold text-emerald-500">{p.entrada1 || '--:--'}</p>
-                    {p.entrada1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.entrada1_obra || p.work_name}</p>}
+                    <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
+                    {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada1, p.work_name)}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida1 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</td>
                   <td className="px-6 py-4">
-                    <p className="text-sm font-bold text-emerald-500">{p.entrada2 || '--:--'}</p>
-                    {p.entrada2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.entrada2_obra || p.work_name}</p>}
+                    <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
+                    {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada2, p.work_name)}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {p.total_hours}
@@ -3687,21 +3769,21 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <div className="grid grid-cols-2 gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 1</p>
-                  <p className="text-sm font-bold text-emerald-500">{p.entrada1 || '--:--'}</p>
-                  {p.entrada1 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.entrada1_obra || p.work_name}</p>}
+                  <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
+                  {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada1, p.work_name)}</p>}
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 1</p>
-                  <p className="text-sm font-bold text-orange-500">{p.saida1 || '--:--'}</p>
+                  <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 2</p>
-                  <p className="text-sm font-bold text-emerald-500">{p.entrada2 || '--:--'}</p>
-                  {p.entrada2 && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.entrada2_obra || p.work_name}</p>}
+                  <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
+                  {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada2, p.work_name)}</p>}
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 2</p>
-                  <p className="text-sm font-bold text-orange-500">{p.saida2 || '--:--'}</p>
+                  <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
                 </div>
               </div>
 
@@ -4540,205 +4622,156 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [tempPos, setTempPos] = useState<any>(null);
 
   const loadTodayPoint = useCallback(async () => {
-    const data = await storage.getPoints(user.id);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
-    const todayPoint = data.find((p: any) => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === today);
-    setPoint(todayPoint || null);
-    if (todayPoint?.work_id) {
-      setSelectedWorkId(String(todayPoint.work_id));
+    if (!user) return;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const docId = `${user.id}_${today}`;
+    
+    try {
+      const pointSnap = await getDoc(doc(db, 'points', docId));
+      if (pointSnap.exists()) {
+        const todayPoint = { id: pointSnap.id, ...pointSnap.data() } as PointRecord;
+        setPoint(todayPoint);
+        if (todayPoint?.work_id) {
+          setSelectedWorkId(String(todayPoint.work_id));
+        }
+      } else {
+        setPoint(null);
+      }
+    } catch (error) {
+      console.error("Error loading today's point:", error);
     }
-    if (point?.entrada1) {
-    }
-  }, [user.id]);
+  }, [user]);
 
   useEffect(() => { 
     loadTodayPoint(); 
   }, [loadTodayPoint]);
 
   const registerPoint = async (type: 'entrada1' | 'saida1' | 'entrada2' | 'saida2', customPos?: any) => {
-    console.log("Registrando ponto para:", user);
-    console.log("Obra selecionada ID:", selectedWorkId);
-
-    if (!user) {
-      alert("Usuário não encontrado. Faça login novamente.");
-      return;
-    }
+    console.log("Registrando ponto:", type, "Para usuario:", user?.id);
+    if (!user) { alert("Usuário não encontrado."); return; }
     if ((type === 'entrada1' || type === 'entrada2') && !selectedWorkId) {
-      alert('Selecione a obra antes de registrar o ponto.');
-      return;
+      alert('Selecione a obra.'); return;
     }
 
-    // Proteção contra registros duplicados (30 segundos)
     if (point?.last_timestamp && (Date.now() - point.last_timestamp < 30000)) {
-      alert('Aguarde pelo menos 30 segundos entre os registros para evitar duplicidade.');
-      return;
+      alert('Aguarde 30 segundos para registrar o próximo ponto.'); return;
     }
-
-    // Validação de sequência lógica
-    if (type === 'saida1' && !point?.entrada1) {
-      alert('Você precisa registrar a entrada antes da saída.');
-      return;
-    }
-    if (type === 'entrada2' && !point?.saida1) {
-      alert('Você precisa registrar a primeira saída antes da segunda entrada.');
-      return;
-    }
-    if (type === 'saida2' && !point?.entrada2) {
-      alert('Você precisa registrar a segunda entrada antes da segunda saída.');
-      return;
-    }
+    
+    // Sequential validation
+    if (type === 'saida1' && !point?.entrada1) { alert('Aguarde Entrada 1 primeiro.'); return; }
+    if (type === 'entrada2' && !point?.saida1) { alert('Aguarde Saída 1 primeiro.'); return; }
+    if (type === 'saida2' && !point?.entrada2) { alert('Aguarde Entrada 2 primeiro.'); return; }
 
     setLoading(true);
     setStatus('locating');
-    setShowSuccess(false);
     
     try {
-      const selectedWork = works.find(w => String(w.id) === String(selectedWorkId));
       const agora = new Date();
-      const horaLocal = agora.toLocaleTimeString('pt-BR', {
-        timeZone: 'America/Sao_Paulo',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-      const dataLocal = agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
+      const horaLocal = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+      const dataLocal = agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+      const docId = `${user.id}_${dataLocal}`;
+      const pointRef = doc(db, 'points', docId);
 
-      let pos: GeolocationPosition | null = null;
-      if (customPos) {
-        pos = customPos;
+      // 1. Fetch current document or create it if missing
+      const pointSnap = await getDoc(pointRef);
+      let pointData: PointRecord;
+
+      if (pointSnap.exists()) {
+        pointData = adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() });
       } else {
+        pointData = {
+          id: docId,
+          user_id: String(user.id),
+          funcionario_id: String(user.id),
+          user_name: user.name,
+          date: dataLocal,
+          obs: '',
+          total_hours: '00:00',
+          status: WorkStatus.NAO_INICIADO
+        } as PointRecord;
+      }
+
+      // 2. Perform location lookup
+      let pos: GeolocationPosition | null = null;
+      if (customPos) pos = customPos;
+      else {
         try {
           pos = await new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(
-              (position) => resolve(position),
-              (error) => reject(error),
-              {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 0
-              }
-            );
+            navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 });
           });
-        } catch (err) {
-          console.error("Erro ao obter localização", err);
-        }
+        } catch (e) { console.error("Geo error", e); }
       }
 
       let address = "Localização não obtida";
-      
       if (pos) {
-         try {
-            const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`);
-            const geoData = await geoRes.json();
-            address = geoData.display_name || "Endereço não disponível";
-         } catch (e) {
-            console.error("Geocoding error", e);
-            address = "Endereço não disponível";
-         }
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`);
+          const d = await r.json();
+          address = d.display_name || "Endereço não disponível";
+        } catch (e) { }
       }
 
-      setStatus('saving');
-
-      // Local Registration Logic
-      const allPoints = await storage.getPoints(user.id);
-      let point = allPoints.find(p => (String(p.funcionario_id) === String(user.id) || String(p.user_id) === String(user.id)) && p.date === dataLocal);
+      // 3. Update data
+      const selectedWork = works.find(w => String(w.id) === String(selectedWorkId));
       
-      if (!point) {
-        point = {
-          id: crypto.randomUUID(),
-          user_id: user.id,
-          funcionario_id: user.id,
-          user_name: user.name,
-          date: dataLocal,
-          entrada1: '', saida1: '', entrada2: '', saida2: '',
-          entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0, entrada1_address: '',
-          saida1_lat: 0, saida1_lng: 0, saida1_acc: 0, saida1_address: '',
-          entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0, entrada2_address: '',
-          saida2_lat: 0, saida2_lng: 0, saida2_acc: 0, saida2_address: '',
-          obs: '',
-          total_hours: '00:00',
-          status: WorkStatus.TRABALHANDO
-        };
-        allPoints.push(point);
-      }
-
-      // Update fields
-      const lat = pos ? pos.coords.latitude : 0;
-      const lng = pos ? pos.coords.longitude : 0;
-      const acc = pos ? pos.coords.accuracy : 0;
-      
-      if (point) {
-      }
+      const segment: PointSegmentRecord = {
+        horario: horaLocal,
+        obraId: String(selectedWorkId || ''),
+        obraNome: selectedWork?.name || 'Não informada',
+        observacao: obs,
+        gps: {
+          lat: pos?.coords.latitude || 0,
+          lng: pos?.coords.longitude || 0,
+          acc: pos?.coords.accuracy || 0,
+          address: address
+        }
+      };
 
       if (type === 'entrada1') {
-        point.entrada1 = horaLocal;
-        point.entrada1_lat = lat; point.entrada1_lng = lng; point.entrada1_acc = acc; point.entrada1_address = address;
-        point.work_id = String(selectedWorkId);
-        point.work_name = selectedWork?.name;
-        point.entrada1_obra = selectedWork?.name;
-        continuar(point);
+        pointData.entrada1 = segment;
       } else if (type === 'saida1') {
-        point.saida1 = horaLocal;
-        point.saida1_lat = lat; point.saida1_lng = lng; point.saida1_acc = acc; point.saida1_address = address;
-        pausar(point);
+        pointData.saida1 = segment;
       } else if (type === 'entrada2') {
-        point.entrada2 = horaLocal;
-        point.entrada2_lat = lat; point.entrada2_lng = lng; point.entrada2_acc = acc; point.entrada2_address = address;
-        point.entrada2_obra = selectedWork?.name;
-        continuar(point);
+        pointData.entrada2 = segment;
       } else if (type === 'saida2') {
-        point.saida2 = horaLocal;
-        point.saida2_lat = lat; point.saida2_lng = lng; point.saida2_acc = acc; point.saida2_address = address;
-        encerrar(point);
+        pointData.saida2 = segment;
       }
-
-      point.last_timestamp = Date.now();
-
-      if (obs) point.obs = obs;
-
-      // GPS Status
-      let gpsStatus = 'ok';
-      if (acc > 300) gpsStatus = 'fraco';
-      if (!pos) gpsStatus = 'não obtido';
       
-      if (type === 'entrada1') point.entrada1_gps_status = gpsStatus;
-      else if (type === 'saida1') point.saida1_gps_status = gpsStatus;
-      else if (type === 'entrada2') point.entrada2_gps_status = gpsStatus;
-      else if (type === 'saida2') point.saida2_gps_status = gpsStatus;
+      pointData.last_timestamp = Date.now();
+      pointData.status = pointData.status || WorkStatus.TRABALHANDO_1;
+      
+// --- Sanitization moved to top level ---
+      // 4. Save to Firestore
+      await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
+      console.log("Ponto salvo com sucesso no ID:", docId);
+      
+      if (obs.trim()) {
+        const newObs = { etapa: type, texto: obs.trim(), timestamp: Date.now(), user_name: user.name };
+        
+        const currentObs = pointData.obs || '';
+        const labels: Record<string, string> = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
+        const labelContext = labels[type] || type;
+        const updatedObs = currentObs ? `${currentObs} | [${labelContext}] ${obs.trim()}` : `[${labelContext}] ${obs.trim()}`;
 
-      // Distance from work
-      const currentWork = works.find(w => String(w.id) === (type === 'entrada1' || type === 'entrada2' ? String(selectedWorkId) : String(point?.work_id)));
-      if (pos && currentWork && currentWork.lat && currentWork.lng) {
-        const dist = calculateDistance(lat, lng, currentWork.lat, currentWork.lng);
-        if (type === 'entrada1') point.entrada1_dist = dist;
-        else if (type === 'saida1') point.saida1_dist = dist;
-        else if (type === 'entrada2') point.entrada2_dist = dist;
-        else if (type === 'saida2') point.saida2_dist = dist;
+        await updateDoc(pointRef, {
+          observations: arrayUnion(newObs),
+          obs: updatedObs
+        });
       }
-
-      // GPS Suspeito
-      let prevLat = null, prevLng = null, prevTime = null;
-      if (type === 'saida1' && point.entrada1_lat && point.entrada1_lng) {
-        prevLat = point.entrada1_lat; prevLng = point.entrada1_lng; prevTime = Date.now() - 60000; // Mock time diff for now or use real timestamps if stored
-      }
-      // Replicating the 3km/2min logic would require storing timestamps for each point.
-      // For now, let's keep it simple or add timestamps to PointRecord.
       
-      point.total_hours = calculateRecordMetrics(point).workedHours;
-      
-      await storage.savePoints(allPoints);
-
-      setLastRegisteredTime(horaLocal);
-      setShowSuccess(true);
-      loadTodayPoint();
-      onRefresh();
       setObs('');
 
       if (type === 'saida1') {
         setIsPauseModalOpen(true);
       }
+
+      setLastRegisteredTime(horaLocal);
+      setShowSuccess(true);
+      await loadTodayPoint();
+      onRefresh();
     } catch (err) {
-      console.error("Erro fatal ao registrar ponto:", err);
-      alert('Erro ao registrar ponto.');
+      console.error("Erro ao registrar ponto:", err);
+      alert("Erro ao salvar.");
     } finally {
       setLoading(false);
       setStatus('idle');
@@ -4762,7 +4795,12 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setLoading(false);
   };
 
-  const nextAction = point?.encerrado ? null : !point?.entrada1 ? 'entrada1' : !point?.saida1 ? 'saida1' : !point?.entrada2 ? 'entrada2' : !point?.saida2 ? 'saida2' : null;
+  const nextAction = point?.encerrado ? null : 
+    !point?.entrada1 ? 'entrada1' : 
+    !point?.saida1 ? 'saida1' : 
+    (point.status === 'pausa' && !point?.entrada2) ? 'entrada2' : 
+    (point.status === 'trabalhando' && point.saida1 && !point.entrada2) ? null : // Waiting for Saída 1 modal decision
+    (!point?.saida2 && point.entrada2) ? 'saida2' : null;
   const actionLabels = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
 
   return (
@@ -4836,7 +4874,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
             {(nextAction === 'saida1' || nextAction === 'saida2') && point?.work_name && (
               <div className="flex items-center justify-center gap-2 py-2 px-4 bg-slate-900 rounded-xl border border-slate-800">
                 <MapIcon size={16} className="text-orange-500" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Obra: {nextAction === 'saida1' ? (point.entrada1_obra || point.work_name) : (point.entrada2_obra || point.work_name)}</span>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Obra: {nextAction === 'saida1' ? (point.entrada1?.obraNome || 'Não informada') : (point.entrada2?.obraNome || 'Não informada')}</span>
               </div>
             )}
 
@@ -4879,10 +4917,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       </Card>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <PointMiniCard label="Entrada 1" time={point?.entrada1} active={!!point?.entrada1} obra={point?.entrada1_obra || point?.work_name} />
-        <PointMiniCard label="Saída 1" time={point?.saida1} active={!!point?.saida1} />
-        <PointMiniCard label="Entrada 2" time={point?.entrada2} active={!!point?.entrada2} obra={point?.entrada2_obra || point?.entrada1_obra || point?.work_name} />
-        <PointMiniCard label="Saída 2" time={point?.saida2} active={!!point?.saida2} />
+        <PointMiniCard label="Entrada 1" time={point?.entrada1?.horario} active={!!point?.entrada1?.horario} obra={point?.entrada1?.obraNome || point?.work_name} />
+        <PointMiniCard label="Saída 1" time={point?.saida1?.horario} active={!!point?.saida1?.horario} obra={point?.saida1?.obraNome} />
+        <PointMiniCard label="Entrada 2" time={point?.entrada2?.horario} active={!!point?.entrada2?.horario} obra={point?.entrada2?.obraNome} />
+        <PointMiniCard label="Saída 2" time={point?.saida2?.horario} active={!!point?.saida2?.horario} obra={point?.saida2?.obraNome} />
       </div>
 
       {point && (
@@ -4898,15 +4936,24 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         </Card>
       )}
 
-      <Modal isOpen={isPauseModalOpen} onClose={() => setIsPauseModalOpen(false)} title="Encerrar jornada?">
+      <Modal isOpen={isPauseModalOpen} onClose={() => setIsPauseModalOpen(false)} title="Jornada pausada">
         <div className="space-y-6">
-          <p className="text-slate-300">Deseja encerrar a jornada ou realizar uma pausa?</p>
+          <p className="text-slate-300">Deseja encerrar a jornada ou continuar depois?</p>
           <div className="grid grid-cols-1 gap-3">
-            <Button onClick={() => setIsPauseModalOpen(false)} variant="primary" className="w-full py-4">
-              Continuar jornada
+            <Button onClick={async () => {
+              setIsPauseModalOpen(false);
+              setLoading(true);
+              if (point) {
+                const pointRef = doc(db, 'points', point.id as string);
+                await updateDoc(pointRef, { status: 'pausa' });
+                await loadTodayPoint();
+              }
+              setLoading(false);
+            }} variant="primary" className="w-full py-4">
+              Continuar Jornada
             </Button>
             <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
-              Encerrar jornada
+              Encerrar Jornada
             </Button>
           </div>
         </div>

@@ -63,7 +63,7 @@ service cloud.firestore {
     }
 
     function isDocOwner() {
-      return isAuthenticated() && request.auth.uid == resource.data.user_id;
+      return isAuthenticated() && resource != null && request.auth.uid == resource.data.user_id;
     }
 
     function isDocOwnerCreate() {
@@ -124,34 +124,23 @@ service cloud.firestore {
              (!('radius' in request.resource.data) || request.resource.data.radius is number);
     }
 
-    function isValidPoint() {
-      // Due to the large number of fields in points, we do basic validation for security
-      // and prevent massive payloads.
+    function isValidPointCreate() {
+      // For create, we need minimal structure validation
       return request.resource.data.user_id is string &&
              request.resource.data.user_id.size() < 100 &&
              request.resource.data.date is string &&
-             request.resource.data.date.size() == 10 &&
-             isValidOptionalString('funcionario_id', 0, 100) &&
-             isValidOptionalString('user_name', 0, 100) &&
-             isValidOptionalString('entrada1', 0, 10) &&
-             isValidOptionalString('saida1', 0, 10) &&
-             isValidOptionalString('entrada2', 0, 10) &&
-             isValidOptionalString('saida2', 0, 10) &&
-             isValidOptionalString('entrada1_address', 0, 500) &&
-             isValidOptionalString('saida1_address', 0, 500) &&
-             isValidOptionalString('entrada2_address', 0, 500) &&
-             isValidOptionalString('saida2_address', 0, 500) &&
-             isValidOptionalString('entrada1_status', 0, 100) &&
-             isValidOptionalString('saida1_status', 0, 100) &&
-             isValidOptionalString('entrada2_status', 0, 100) &&
-             isValidOptionalString('saida2_status', 0, 100) &&
-             isValidOptionalString('entrada1_gps_status', 0, 100) &&
-             isValidOptionalString('saida1_gps_status', 0, 100) &&
-             isValidOptionalString('entrada2_gps_status', 0, 100) &&
-             isValidOptionalString('saida2_gps_status', 0, 100) &&
-             isValidOptionalString('entrada1_obra', 0, 100) &&
-             isValidOptionalString('entrada2_obra', 0, 100) &&
-             (!('obs' in request.resource.data) || (request.resource.data.obs is string && request.resource.data.obs.size() < 1000));
+             request.resource.data.date.size() == 10;
+    }
+
+    function isValidPointUpdate() {
+      // For update, we only check fields that are explicitly being updated if present
+      // We also enforce that user_id and date cannot be changed
+      return (!('user_id' in request.resource.data) || request.resource.data.user_id == resource.data.user_id) &&
+             (!('date' in request.resource.data) || request.resource.data.date == resource.data.date);
+    }
+
+    function isPointOwner(pointId) {
+      return isAuthenticated() && pointId.startsWith(request.auth.uid + "_");
     }
 
     // ===============================================================
@@ -161,6 +150,7 @@ service cloud.firestore {
     match /users/{userId} {
       // Users can read their own profile, admins can read all
       allow read: if isOwner(userId) || isAdmin();
+      // Only admins can list users to prevent leaking profile data
       allow list: if isAdmin();
       
       // Users can create their own profile on first login (as funcionario)
@@ -181,13 +171,14 @@ service cloud.firestore {
 
     match /points/{pointId} {
       // Users can read their own points, admins can read all
-      allow read: if isDocOwner() || isAdmin();
+      // Handle the case where the document doesn't exist yet (resource == null)
+      allow read: if isAdmin() || (isAuthenticated() && (resource == null || request.auth.uid == resource.data.user_id));
       
       // Users can create their own points, admins can create any
-      allow create: if (isDocOwnerCreate() && isValidPoint()) || (isAdmin() && isValidPoint());
+      allow create: if (isAuthenticated() && request.auth.uid == request.resource.data.user_id && isValidPointCreate()) || (isAdmin() && isValidPointCreate());
       
       // Users can update their own points, admins can update any
-      allow update: if (isDocOwner() && isDocOwnerCreate() && isValidPoint()) || (isAdmin() && isValidPoint());
+      allow update: if (isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid)) && isValidPointUpdate();
       
       // Only admins can delete points
       allow delete: if isAdmin();

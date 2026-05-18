@@ -1,0 +1,2 @@
+4679:      console.error("Erro ao registrar ponto:", err);
+4818:                <>Registrar {actionLabels[nextAction as keyof typeof actionLabels]}</>

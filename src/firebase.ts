@@ -7,21 +7,17 @@ import {
   browserSessionPersistence,
   indexedDBLocalPersistence
 } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-// Configuração robusta de Firestore
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-}, firebaseConfig.firestoreDatabaseId);
+// Configuração padrão robusta de Firestore
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Inicialização robusta do Auth para evitar erros de rede em certas condições de browser/iframe
 export const auth = initializeAuth(app, {
-  persistence: [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence],
+  persistence: [browserLocalPersistence, browserSessionPersistence],
   popupRedirectResolver: browserPopupRedirectResolver,
 });
 
