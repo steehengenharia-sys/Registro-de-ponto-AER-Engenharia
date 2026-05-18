@@ -211,6 +211,31 @@ const storage = {
 
 // --- Utility Functions ---
 
+function registroContemObra(p: PointRecord, workIdToFind: string, works: Work[]) {
+  if (!workIdToFind) return true;
+  
+  const targetWork = works.find(w => String(w.id) === String(workIdToFind));
+  const tName = targetWork?.name?.trim().toLowerCase();
+
+  const verify = (obraId?: string, obraNome?: string) => {
+    if (obraId && String(obraId) === String(workIdToFind)) return true;
+    if (tName && obraNome && obraNome.trim().toLowerCase() === tName) return true;
+    return false;
+  };
+
+  if (verify(p.work_id, p.work_name)) return true;
+  
+  if (p.entrada1 && verify(p.entrada1.obraId, p.entrada1.obraNome)) return true;
+  if (p.saida1 && verify(p.saida1.obraId, p.saida1.obraNome)) return true;
+  if (p.entrada2 && verify(p.entrada2.obraId, p.entrada2.obraNome)) return true;
+  if (p.saida2 && verify(p.saida2.obraId, p.saida2.obraNome)) return true;
+
+  if (verify(undefined, p.entrada1_obra)) return true;
+  if (verify(undefined, p.entrada2_obra)) return true;
+
+  return false;
+}
+
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371e3; // metres
   const φ1 = lat1 * Math.PI / 180;
@@ -294,7 +319,7 @@ function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0
   };
 }
 
-function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserData[], works: Work[], overrideDiaria?: number, globalDiariaValueStr?: string, mode: 'auto' | 'diaria' | 'manual' = 'auto') {
+function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserData[], works: Work[], overrideDiaria?: number, globalDiariaValueStr?: string, mode: 'auto' | 'diaria' | 'manual' = 'auto', filterWorkId?: string) {
   const intervals: any[] = [];
   
   pointsToExtract.forEach(p => {
@@ -307,27 +332,32 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
     if (p.entrada1?.horario && p1Mins > 0) {
       const valorTotal = (p1Mins / MINUTES_PER_DIARIA) * baseDiaria;
 
-      let w1Id = p.entrada1_obra || p.work_name || p.work_id;
+      let w1Id = p.entrada1?.obraId || p.entrada1_obra || p.work_name || p.work_id;
       let w1Name = '-';
+      let resolvedWorkId1 = '';
       if (w1Id) {
          const searchId = String(w1Id).trim().toLowerCase();
          const wInfo1 = works.find(w => String(w.id).trim().toLowerCase() === searchId || w.name.trim().toLowerCase() === searchId);
          w1Name = wInfo1 ? wInfo1.name.trim() : String(w1Id).trim();
+         resolvedWorkId1 = wInfo1 ? String(wInfo1.id) : '';
       }
 
-      intervals.push({
-        origPoint: p,
-        date: p.date,
-        userId: p.user_id,
-        userName,
-        workName: w1Name,
-        entrada: getHorarioDisplay(p.entrada1),
-        saida: getHorarioDisplay(p.saida1),
-        workedMinutes: p1Mins,
-        workedHoursStr: formatarMinutos(p1Mins),
-        diarias: p1Mins / MINUTES_PER_DIARIA,
-        valorTotal
-      });
+      if (!filterWorkId || String(resolvedWorkId1) === String(filterWorkId)) {
+        intervals.push({
+          origPoint: p,
+          date: p.date,
+          userId: p.user_id,
+          userName,
+          workName: w1Name,
+          workId: resolvedWorkId1,
+          entrada: getHorarioDisplay(p.entrada1),
+          saida: getHorarioDisplay(p.saida1),
+          workedMinutes: p1Mins,
+          workedHoursStr: formatarMinutos(p1Mins),
+          diarias: p1Mins / MINUTES_PER_DIARIA,
+          valorTotal
+        });
+      }
     }
 
     // Intervalo 2
@@ -335,27 +365,32 @@ function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserD
     if (getHorarioDisplay(p.entrada2) !== '--:--' && p2Mins > 0) {
       const valorTotal = (p2Mins / MINUTES_PER_DIARIA) * baseDiaria;
 
-      let w2Id = p.entrada2_obra || p.entrada1_obra || p.work_name || p.work_id; 
+      let w2Id = p.entrada2?.obraId || p.entrada2_obra || p.entrada1_obra || p.work_name || p.work_id; 
       let w2Name = '-';
+      let resolvedWorkId2 = '';
       if (w2Id) {
          const searchId2 = String(w2Id).trim().toLowerCase();
          const wInfo2 = works.find(w => String(w.id).trim().toLowerCase() === searchId2 || w.name.trim().toLowerCase() === searchId2);
          w2Name = wInfo2 ? wInfo2.name.trim() : String(w2Id).trim();
+         resolvedWorkId2 = wInfo2 ? String(wInfo2.id) : '';
       }
 
-      intervals.push({
-        origPoint: p,
-        date: p.date,
-        userId: p.user_id,
-        userName,
-        workName: w2Name,
-        entrada: getHorarioDisplay(p.entrada2),
-        saida: getHorarioDisplay(p.saida2),
-        workedMinutes: p2Mins,
-        workedHoursStr: formatarMinutos(p2Mins),
-        diarias: p2Mins / MINUTES_PER_DIARIA,
-        valorTotal
-      });
+      if (!filterWorkId || String(resolvedWorkId2) === String(filterWorkId)) {
+        intervals.push({
+          origPoint: p,
+          date: p.date,
+          userId: p.user_id,
+          userName,
+          workName: w2Name,
+          workId: resolvedWorkId2,
+          entrada: getHorarioDisplay(p.entrada2),
+          saida: getHorarioDisplay(p.saida2),
+          workedMinutes: p2Mins,
+          workedHoursStr: formatarMinutos(p2Mins),
+          diarias: p2Mins / MINUTES_PER_DIARIA,
+          valorTotal
+        });
+      }
     }
   });
 
@@ -2158,31 +2193,35 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       const workMap = new Map();
       const userMinutesMap = new Map();
 
+      // First gather top-level present users and total alerts
       todayPoints.forEach((p: any) => {
-        const user = validUsers.find((u: any) => String(u.id) === String(p.user_id));
-        const valorDiaria = user?.valor_diaria || 180;
-        const metrics = calculateRecordMetrics(p, valorDiaria);
-        
-        const minutes = metrics.workedMinutes;
-        totalMinutes += minutes;
         presentUsers.add(String(p.user_id));
+      });
+
+      // Extract intervals to split work times accurately
+      const intervals = extractIntervalsFromPoints(todayPoints, users, works);
+
+      intervals.forEach(inv => {
+        const userIdStr = String(inv.userId);
+        const minutes = inv.workedMinutes;
         
+        totalMinutes += minutes;
+
         // Group minutes by user
-        const userIdStr = String(p.user_id);
         if (!userMinutesMap.has(userIdStr)) {
             userMinutesMap.set(userIdStr, 0);
         }
         userMinutesMap.set(userIdStr, userMinutesMap.get(userIdStr) + minutes);
 
-        // Prioritize entrada2_obra or entrada1_obra over work_name
-        const workName = p.entrada2_obra || p.entrada1_obra || p.work_name || 'Não informada';
+        const workName = inv.workName || 'Não informada';
         if (!workMap.has(workName)) {
           workMap.set(workName, { name: workName, employees: new Set(), minutes: 0, cost: 0, userMinutes: new Map() });
         }
+        
         const work = workMap.get(workName);
         work.employees.add(userIdStr);
         work.minutes += minutes;
-        work.cost += metrics.totalValue;
+        work.cost += inv.valorTotal;
 
         // Track minutes per user in this work for cost distribution
         if (!work.userMinutes.has(userIdStr)) {
@@ -3291,7 +3330,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const filteredPoints = points.filter(p => {
     if (!validUserIds.has(String(p.user_id))) return false;
     if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-    if (filters.workId && String(p.work_id) !== String(filters.workId)) return false;
+    if (filters.workId && !registroContemObra(p, filters.workId, works)) return false;
     if (filters.startDate && p.date < filters.startDate) return false;
     if (filters.endDate && p.date > filters.endDate) return false;
     return true;
@@ -3349,6 +3388,13 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const showWarning = (p: PointRecord) => {
     const warnings = [];
     if (p.obs) warnings.push(`Observação: ${p.obs}`);
+    if (p.observations && p.observations.length > 0) {
+      warnings.push(`Observações das Etapas:`);
+      p.observations.forEach(o => {
+        const d = new Date(o.timestamp).toLocaleString('pt-BR');
+        warnings.push(`- [${o.etapa}] ${o.texto} (${d})`);
+      });
+    }
     if (p.editado_manual) warnings.push('Este registro foi editado manualmente por um administrador.');
     
     if (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) {
@@ -3432,7 +3478,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const calculateTotals = (pointsToCalculate: PointRecord[], overrideDiaria?: number) => {
-    const intervals = extractIntervalsFromPoints(pointsToCalculate, users, works, overrideDiaria, diariaValue, 'auto');
+    const intervals = extractIntervalsFromPoints(pointsToCalculate, users, works, overrideDiaria, diariaValue, 'auto', filters.workId);
     
     let totalWorkedMinutes = 0;
     let totalDiariasEq = 0;
@@ -3456,14 +3502,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const generatePDF = () => {
-    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto');
+    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto', filters.workId);
     const total = intervals.reduce((acc, curr) => acc + curr.valorTotal, 0);
     const diaria = parseFloat(diariaValue) || 180;
     generateOfficialReportPDF(intervals, total, filters, users, works, 'auto', diaria);
   };
 
   const generateExcel = () => {
-    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto');
+    const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto', filters.workId);
     const { totalHoursStr, totalHoursDecimal } = calculateTotals(filteredPoints);
 
     const data = intervals.map(inv => {
@@ -3736,7 +3782,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end items-center gap-2 transition-opacity">
-                      {(p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
+                      {((p.observations && p.observations.length > 0) || p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                         <button 
                           onClick={() => showWarning(p)} 
                           className={`p-2 rounded-lg transition-all ${
@@ -3830,7 +3876,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </div>
 
               <div className="flex justify-end items-center pt-2">
-                  {(p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
+                  {((p.observations && p.observations.length > 0) || p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                     <button 
                       onClick={() => showWarning(p)} 
                       className={`p-2 rounded-lg transition-all ${
@@ -4222,13 +4268,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const filtered = points.filter(p => {
       if (!validUserIds.has(String(p.user_id))) return false;
       if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-      if (filters.workId && String(p.work_id) !== String(filters.workId)) return false;
+      if (filters.workId && !registroContemObra(p, filters.workId, works)) return false;
       if (filters.startDate && p.date < filters.startDate) return false;
       if (filters.endDate && p.date > filters.endDate) return false;
       return true;
     });
 
-    const intervals = extractIntervalsFromPoints(filtered, users, works, undefined, undefined, 'auto');
+    const intervals = extractIntervalsFromPoints(filtered, users, works, undefined, undefined, 'auto', filters.workId);
 
     setReportData(intervals);
 
@@ -4285,14 +4331,14 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const filtered = points.filter((p: any) => {
       if (!validUserIds.has(String(p.user_id))) return false;
       if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-      if (filters.workId && String(p.work_id) !== String(filters.workId)) return false;
+      if (filters.workId && !registroContemObra(p as PointRecord, filters.workId, works)) return false;
       if (filters.startDate && p.date < filters.startDate) return false;
       if (filters.endDate && p.date > filters.endDate) return false;
       return true;
     });
 
     const userDefinedDiaria = parseFloat(globalDiariaValue) || undefined;
-    const intervalsLocal = extractIntervalsFromPoints(filtered, users, works, userDefinedDiaria, globalDiariaValue, calcMode);
+    const intervalsLocal = extractIntervalsFromPoints(filtered, users, works, userDefinedDiaria, globalDiariaValue, calcMode, filters.workId);
     
     let totalC = 0;
     if (calcMode === 'manual') {
