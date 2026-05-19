@@ -40,7 +40,7 @@ import * as XLSX from 'xlsx';
 
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy, arrayUnion } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy, arrayUnion, writeBatch } from 'firebase/firestore';
 
 // --- Global Utilities ---
 export const sanitizePointData = (data: any): any => {
@@ -172,13 +172,32 @@ const storage = {
     }
   },
   savePoints: async (points: PointRecord[]) => {
-    // Optimized to use batch or just individual calls if needed, 
-    // but for now let's keep it simple and just add a savePoint for single updates
-    for (const point of points) {
+    // Implementação com writeBatch para eficiência e economia de cota em operações em massa
+    // Divide em lotes de 500 (limite do Firestore)
+    const chunks = [];
+    for (let i = 0; i < points.length; i += 500) {
+      chunks.push(points.slice(i, i + 500));
+    }
+
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      chunk.forEach(point => {
+        const docRef = doc(db, 'points', String(point.id));
+        batch.set(docRef, sanitizePointData(point));
+      });
+      
       try {
-        await setDoc(doc(db, 'points', String(point.id)), sanitizePointData(point));
+        await batch.commit();
       } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, `points/${point.id}`);
+        console.error("Erro ao comitar lote (batch):", e);
+        // Fallback para individual se falhar (opcional, mas seguro)
+        for (const point of chunk) {
+          try {
+            await setDoc(doc(db, 'points', String(point.id)), sanitizePointData(point));
+          } catch (innerE) {
+            handleFirestoreError(innerE, OperationType.WRITE, `points/${point.id}`);
+          }
+        }
       }
     }
   },
@@ -211,29 +230,15 @@ const storage = {
 
 // --- Utility Functions ---
 
-function registroContemObra(p: PointRecord, workIdToFind: string, works: Work[]) {
+function registroContemObra(p: PointRecord, workIdToFind: string, works: Work[], users: UserData[]) {
   if (!workIdToFind) return true;
-  
-  const targetWork = works.find(w => String(w.id) === String(workIdToFind));
-  const tName = targetWork?.name?.trim().toLowerCase();
-
-  const verify = (obraId?: string, obraNome?: string) => {
-    if (obraId && String(obraId) === String(workIdToFind)) return true;
-    if (tName && obraNome && obraNome.trim().toLowerCase() === tName) return true;
-    return false;
-  };
-
-  if (verify(p.work_id, p.work_name)) return true;
-  
-  if (p.entrada1 && verify(p.entrada1.obraId, p.entrada1.obraNome)) return true;
-  if (p.saida1 && verify(p.saida1.obraId, p.saida1.obraNome)) return true;
-  if (p.entrada2 && verify(p.entrada2.obraId, p.entrada2.obraNome)) return true;
-  if (p.saida2 && verify(p.saida2.obraId, p.saida2.obraNome)) return true;
-
-  if (verify(undefined, p.entrada1_obra)) return true;
-  if (verify(undefined, p.entrada2_obra)) return true;
-
-  return false;
+  const resumo = calcularResumoRegistro(p, undefined, works, users);
+  return resumo.intervalos.some(int => {
+     if (String(int.obraId) === String(workIdToFind)) return true;
+     const targetWork = works.find(w => String(w.id) === String(workIdToFind));
+     if (targetWork && int.obraNome.trim().toLowerCase() === targetWork.name.trim().toLowerCase()) return true;
+     return false;
+  });
 }
 
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -301,101 +306,179 @@ function somarHoras(listaDeHoras: string[]): string {
 
 const MINUTES_PER_DIARIA = 600; // 10h
 
-function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria: number = 0) {
-  const p1 = calcularPeriodo(p.entrada1?.horario || '', p.saida1?.horario || '');
-  const p2 = calcularPeriodo(p.entrada2?.horario || '', p.saida2?.horario || '');
-  const totalMinutos = p1 + p2;
+// --- Centralized Calculation Engine ---
+
+function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Work[], users?: UserData[]): ResumoRegistro {
+  const intervals: IntervaloTrabalho[] = [];
+  let totalMinutos = 0;
   
-  const baseDiaria = valorDiaria || 180;
+  // Decide base daily rate
+  let baseDiaria = valorDiaria;
+  if (!baseDiaria) {
+    const user = users?.find(u => String(u.id) === String(p.user_id));
+    baseDiaria = user?.valor_diaria || 180;
+  }
   
-  const valorTotal = Math.round(((totalMinutos / MINUTES_PER_DIARIA) * baseDiaria) * 100) / 100;
-  const diariasEquivalentes = totalMinutos / MINUTES_PER_DIARIA;
+  const createInterval = (entrada: PointSegmentRecord | undefined, saida: PointSegmentRecord | undefined, fallbackObraId?: string, fallbackObraName?: string): IntervaloTrabalho | null => {
+    const eTime = getHorarioDisplay(entrada);
+    const sTime = getHorarioDisplay(saida);
+    const mins = calcularPeriodo(eTime, sTime);
+    
+    if (eTime === '--:--' || mins <= 0) return null;
+    
+    // Obra resolution hierarchy: 
+    // 1. Entry Segment (obraId/obraNome)
+    // 2. Exit Segment (obraId/obraNome)
+    // 3. Fallback (from record top-level or legacy fields)
+    let obraId = entrada?.obraId || saida?.obraId || fallbackObraId || p.work_id || '';
+    let obraNome = entrada?.obraNome || saida?.obraNome || fallbackObraName || p.work_name || '-';
+    
+    // Try to normalize obra from list
+    if (works) {
+      const searchVal = String(obraId || obraNome).trim().toLowerCase();
+      if (searchVal && searchVal !== '-' && searchVal !== 'não informada') {
+        const foundWork = works.find(w => 
+          String(w.id).trim().toLowerCase() === searchVal || 
+          w.name.trim().toLowerCase() === searchVal
+        );
+        if (foundWork) {
+          obraId = foundWork.id;
+          obraNome = foundWork.name;
+        }
+      }
+    }
+    
+    if (!obraNome || obraNome === '-') obraNome = 'Não informada';
+    
+    // Rule: valorHora = baseDiaria / 10.
+    // If status is TRABALHANDO and this is the active segment (no saida), value should be 0.
+    let valor = 0;
+    if (saida && mins > 0) {
+      valor = Math.round(((mins / MINUTES_PER_DIARIA) * baseDiaria!) * 100) / 100;
+    }
+    
+    const observacoes: string[] = [];
+    if (entrada?.observacao) observacoes.push(entrada.observacao);
+    if (saida?.observacao) observacoes.push(saida.observacao);
+
+    return {
+      obraId: String(obraId),
+      obraNome,
+      entrada: eTime,
+      saida: sTime,
+      minutos: mins,
+      horasFormatadas: formatarMinutos(mins),
+      valor,
+      observacoes,
+      gpsEntrada: entrada?.gps,
+      gpsSaida: saida?.gps
+    };
+  };
+
+  const statusStr = calculateWorkStatus(p);
+  let status: ResumoRegistro["status"] = "NAO_INICIADO";
+  if (statusStr === WorkStatus.TRABALHANDO) status = "TRABALHANDO";
+  else if (statusStr === WorkStatus.ENCERRADO) status = "ENCERRADO";
+  else if (statusStr === WorkStatus.PAUSADO) status = "PAUSADO";
+
+  // Interval 1: Morning/Entry 1
+  const int1 = createInterval(
+    p.entrada1, 
+    p.saida1, 
+    p.entrada1_obra, // fallback Id/Name
+    p.entrada1_obra || p.work_name
+  );
+  if (int1) {
+    intervals.push(int1);
+    totalMinutos += int1.minutos;
+  }
+  
+  // Interval 2: Afternoon/Entry 2
+  const int2 = createInterval(
+    p.entrada2, 
+    p.saida2, 
+    p.entrada2_obra || p.entrada1_obra, 
+    p.entrada2_obra || p.entrada1_obra || p.work_name
+  );
+  if (int2) {
+    intervals.push(int2);
+    totalMinutos += int2.minutos;
+  }
+  
+  // Total value is sum of interval values
+  const valorTotal = intervals.reduce((acc, curr) => acc + curr.valor, 0);
 
   return {
-    workedMinutes: totalMinutos,
-    workedHours: formatarMinutos(totalMinutos),
-    totalValue: valorTotal,
-    diariasEquivalentes
+    totalMinutos,
+    totalHorasFormatadas: formatarMinutos(totalMinutos),
+    valorTotal,
+    intervalos: intervals,
+    status,
+    possuiInconsistencia: false 
+  };
+}
+
+function calculateRecordMetrics(p: Partial<PointRecord>, valorDiaria?: number, users?: UserData[]) {
+  const resumo = calcularResumoRegistro(p as PointRecord, valorDiaria, undefined, users);
+  return {
+    workedMinutes: resumo.totalMinutos,
+    workedHours: resumo.totalHorasFormatadas,
+    totalValue: resumo.valorTotal,
+    diariasEquivalentes: resumo.totalMinutos / MINUTES_PER_DIARIA
   };
 }
 
 function extractIntervalsFromPoints(pointsToExtract: PointRecord[], users: UserData[], works: Work[], overrideDiaria?: number, globalDiariaValueStr?: string, mode: 'auto' | 'diaria' | 'manual' = 'auto', filterWorkId?: string) {
-  const intervals: any[] = [];
+  const allIntervals: any[] = [];
   
+  const targetWork = filterWorkId ? works.find(w => String(w.id) === String(filterWorkId)) : null;
+  const tName = targetWork?.name?.trim().toLowerCase();
+
+  const matchFilter = (id?: string | number, name?: string | null) => {
+    if (!filterWorkId) return true;
+    if (id && String(id) === String(filterWorkId)) return true;
+    if (tName && name && name.trim().toLowerCase() === tName) return true;
+    return false;
+  };
+
   pointsToExtract.forEach(p => {
     const user = users.find(u => String(u.id) === String(p.user_id));
-    const baseDiaria = overrideDiaria || user?.valor_diaria || (globalDiariaValueStr ? parseFloat(globalDiariaValueStr) : 180) || 180;
-    const userName = p.user_name || user?.name || '-';
     
-    // Intervalo 1
-    const p1Mins = calcularPeriodo(p.entrada1?.horario || '', p.saida1?.horario || '');
-    if (p.entrada1?.horario && p1Mins > 0) {
-      const valorTotal = (p1Mins / MINUTES_PER_DIARIA) * baseDiaria;
-
-      let w1Id = p.entrada1?.obraId || p.entrada1_obra || p.work_name || p.work_id;
-      let w1Name = '-';
-      let resolvedWorkId1 = '';
-      if (w1Id) {
-         const searchId = String(w1Id).trim().toLowerCase();
-         const wInfo1 = works.find(w => String(w.id).trim().toLowerCase() === searchId || w.name.trim().toLowerCase() === searchId);
-         w1Name = wInfo1 ? wInfo1.name.trim() : String(w1Id).trim();
-         resolvedWorkId1 = wInfo1 ? String(wInfo1.id) : '';
-      }
-
-      if (!filterWorkId || String(resolvedWorkId1) === String(filterWorkId)) {
-        intervals.push({
-          origPoint: p,
-          date: p.date,
-          userId: p.user_id,
-          userName,
-          workName: w1Name,
-          workId: resolvedWorkId1,
-          entrada: getHorarioDisplay(p.entrada1),
-          saida: getHorarioDisplay(p.saida1),
-          workedMinutes: p1Mins,
-          workedHoursStr: formatarMinutos(p1Mins),
-          diarias: p1Mins / MINUTES_PER_DIARIA,
-          valorTotal
-        });
-      }
+    let baseDiaria: number;
+    if (mode === 'manual' || mode === 'diaria') {
+        const parsedGlobal = globalDiariaValueStr ? parseFloat(globalDiariaValueStr) : 180;
+        baseDiaria = overrideDiaria || parsedGlobal || 180;
+    } else {
+        // MODO AUTOMÁTICO: Use user's registered value
+        baseDiaria = user?.valor_diaria || 180;
     }
 
-    // Intervalo 2
-    const p2Mins = calcularPeriodo(getHorarioDisplay(p.entrada2), getHorarioDisplay(p.saida2));
-    if (getHorarioDisplay(p.entrada2) !== '--:--' && p2Mins > 0) {
-      const valorTotal = (p2Mins / MINUTES_PER_DIARIA) * baseDiaria;
-
-      let w2Id = p.entrada2?.obraId || p.entrada2_obra || p.entrada1_obra || p.work_name || p.work_id; 
-      let w2Name = '-';
-      let resolvedWorkId2 = '';
-      if (w2Id) {
-         const searchId2 = String(w2Id).trim().toLowerCase();
-         const wInfo2 = works.find(w => String(w.id).trim().toLowerCase() === searchId2 || w.name.trim().toLowerCase() === searchId2);
-         w2Name = wInfo2 ? wInfo2.name.trim() : String(w2Id).trim();
-         resolvedWorkId2 = wInfo2 ? String(wInfo2.id) : '';
-      }
-
-      if (!filterWorkId || String(resolvedWorkId2) === String(filterWorkId)) {
-        intervals.push({
-          origPoint: p,
-          date: p.date,
-          userId: p.user_id,
-          userName,
-          workName: w2Name,
-          workId: resolvedWorkId2,
-          entrada: getHorarioDisplay(p.entrada2),
-          saida: getHorarioDisplay(p.saida2),
-          workedMinutes: p2Mins,
-          workedHoursStr: formatarMinutos(p2Mins),
-          diarias: p2Mins / MINUTES_PER_DIARIA,
-          valorTotal
-        });
-      }
-    }
+    const userName = p.user_name || user?.name || '---';
+    const resumo = calcularResumoRegistro(p, baseDiaria, works, users);
+    
+    resumo.intervalos.forEach(int => {
+       if (matchFilter(int.obraId, int.obraNome)) {
+         allIntervals.push({
+           origPoint: p,
+           date: p.date,
+           userId: p.user_id,
+           userName,
+           workName: int.obraNome,
+           workId: int.obraId,
+           entrada: int.entrada,
+           saida: int.saida,
+           workedMinutes: int.minutos,
+           workedHoursStr: int.horasFormatadas,
+           diarias: int.minutos / MINUTES_PER_DIARIA,
+           valorTotal: int.valor,
+           baseDiaria: baseDiaria // Keep track of the daily rate used for this interval
+         });
+       }
+    });
   });
 
-  intervals.sort((a, b) => a.date.localeCompare(b.date));
-  return intervals;
+  allIntervals.sort((a, b) => a.date.localeCompare(b.date));
+  return allIntervals;
 }
 
 function generateOfficialReportPDF(
@@ -416,7 +499,7 @@ function generateOfficialReportPDF(
     const subHoursTotal = formatarMinutos(subMinsTotal);
     const subDiariasTotal = subMinsTotal / MINUTES_PER_DIARIA;
     const subEmployeesTotal = new Set(finalData.map((p: any) => String(p.userId))).size;
-    const calculationModeText = calcMode === 'auto' ? 'Automático (por horas)' : calcMode === 'diaria' ? 'Diárias Inteiras' : 'Manual';
+    const calculationModeText = calcMode === 'manual' ? `Manual (Base R$${globalDiaria.toFixed(2)})` : 'Automático por Funcionário';
 
     const colorBlue: [number, number, number] = [30, 58, 95];
     const colorOrange: [number, number, number] = [234, 88, 12];
@@ -542,11 +625,24 @@ function generateOfficialReportPDF(
         const splitVal = doc.splitTextToSize(val, w - 16);
         doc.text(splitVal, xOffset + 14, currentY + 10);
         
-        if (i === 3 && calcMode !== 'manual') {
+        if (i === 3) {
             doc.setFontSize(6);
             doc.setFont("helvetica", "normal");
             doc.setTextColor(...colorSlate);
-            doc.text(`Diária base: R$ ${globalDiaria.toFixed(2)}`, xOffset + 14, currentY + 14);
+            
+            let info = '';
+            if (calcMode === 'manual') {
+                info = `Valor Fixo: R$ ${globalDiaria.toFixed(2)}`;
+            } else {
+                // Collect individual rates
+                const sampleUsers = Array.from(new Set(finalData.map(d => d.userId))).slice(0, 2);
+                const userInfos = sampleUsers.map(uid => {
+                    const u = users.find(usr => String(usr.id) === String(uid));
+                    return u ? `${u.name.split(' ')[0]}: R$${u.valor_diaria || 180}` : '';
+                }).filter(Boolean);
+                info = userInfos.length > 0 ? `Ref: ${userInfos.join(', ')}${new Set(finalData.map(d => d.userId)).size > 2 ? '...' : ''}` : 'Individual';
+            }
+            doc.text(info, xOffset + 14, currentY + 14);
         }
 
         if (i < 3) {
@@ -680,27 +776,25 @@ function generateOfficialReportPDF(
     autoTable(doc, {
       startY: currentY,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'FUNCIONÁRIOS', 'HORAS', 'DIÁRIAS', 'CUSTO TOTAL']],
+      head: [['OBRA', 'FUNC.', 'HORAS', 'CUSTO TOTAL']],
       body: [
         ...workSummaryRows.map(w => [
           w.name,
           w.workers.size.toString(),
           formatarMinutos(w.mins),
-          (w.mins / MINUTES_PER_DIARIA).toFixed(2),
           formatCurrency(w.cost)
         ]),
-        ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+        ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8, halign: 'center', cellPadding: 1 },
       bodyStyles: { fontSize: 7.5, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
       columnStyles: { 
-        0: { halign: 'left', fontStyle: 'bold', cellWidth: 'auto' }, 
+        0: { halign: 'center', fontStyle: 'bold', cellWidth: 'auto' }, 
         1: { halign: 'center' }, 
         2: { halign: 'center' }, 
-        3: { halign: 'center' }, 
-        4: { halign: 'right', fontStyle: 'bold' } 
+        3: { halign: 'center', fontStyle: 'bold' } 
       },
       didParseCell: (data: any) => {
         if (data.row.index === workSummaryRows.length) {
@@ -719,31 +813,34 @@ function generateOfficialReportPDF(
 
     const sortedData = [...finalData].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (a.userName !== b.userName) return a.userName.localeCompare(b.userName);
       return (a.entrada || '').localeCompare(b.entrada || '');
     });
 
     autoTable(doc, {
       startY: currentY,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
+      head: [['FUNCIONÁRIO', 'DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
       body: sortedData.map(p => [
+        p.userName || '---',
         new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR'),
         p.workName || '---',
         `${p.entrada || '--:--'} às ${p.saida || '--:--'}`,
         p.workedHoursStr,
         formatCurrency(p.valorTotal)
       ]),
-      foot: [['TOTAL GERAL', '', '', subHoursTotal, formatCurrency(totalCostToDisplay)]],
+      foot: [['TOTAL GERAL', '', '', '', subHoursTotal, formatCurrency(totalCostToDisplay)]],
       theme: 'striped',
-      headStyles: { fillColor: colorBlue, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
-      bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', cellPadding: 1 },
-      footStyles: { fillColor: colorBlue, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold', halign: 'center', valign: 'middle', cellPadding: 1.5, minCellHeight: 6 },
+      headStyles: { fillColor: colorBlue, fontSize: 8, halign: 'center', cellPadding: 1.5 },
+      bodyStyles: { fontSize: 7.5, halign: 'center', valign: 'middle', cellPadding: 1 },
+      footStyles: { fillColor: colorBlue, textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold', halign: 'center', valign: 'middle', cellPadding: 1.5, minCellHeight: 6 },
       columnStyles: { 
-        0: { cellWidth: 26, halign: 'left' },
-        1: { halign: 'left' },
-        2: { halign: 'center', cellWidth: 40 },
-        3: { halign: 'center', cellWidth: 22 },
-        4: { halign: 'right', cellWidth: 30 } 
+        0: { halign: 'center', cellWidth: 35 },
+        1: { halign: 'center', cellWidth: 25 },
+        2: { halign: 'center' },
+        3: { halign: 'center', cellWidth: 40 },
+        4: { halign: 'center', cellWidth: 22 },
+        5: { halign: 'center', cellWidth: 30 } 
       },
       didParseCell: (data) => {
         if (data.section === 'foot') {
@@ -782,7 +879,8 @@ function generateReciboPDF(
   totalCostToDisplay: number, 
   filters: any, 
   users: UserData[], 
-  globalDiaria: number
+  globalDiaria: number,
+  calcMode: 'auto' | 'diaria' | 'manual'
 ) {
     const doc = new jsPDF('p', 'mm', 'a4');
     const pageWidth = 210;
@@ -861,7 +959,7 @@ function generateReciboPDF(
 
     const colWidths = [totalW * 0.25, totalW * 0.30, totalW * 0.22, totalW * 0.23];
     const labels = ['FUNCIONÁRIO', 'PERÍODO', 'TOTAL DE HORAS', 'TOTAL DE DIÁRIAS'];
-    const values = [employeeName.toUpperCase(), periodoStr, subHoursTotal, subDiariasTotal.toFixed(2)];
+    const values = [employeeName.toUpperCase(), periodoStr, subHoursTotal, calcMode === 'manual' ? `FIXO (R$${globalDiaria})` : 'INDIVIDUAL'];
     
     let xOffset = marginLeft;
     for (let i = 0; i < 4; i++) {
@@ -881,15 +979,17 @@ function generateReciboPDF(
         doc.setFontSize(6.5);
         doc.setTextColor(...colorSlate);
         doc.setFont("helvetica", "bold");
-        doc.text(labels[i], xOffset + 14, currentY + 6);
+        doc.text(i === 3 ? 'MODO CÁLCULO' : labels[i], xOffset + 14, currentY + 6);
         doc.setFontSize(8.5);
         doc.setTextColor(15, 23, 42);
         doc.text(values[i], xOffset + 14, currentY + 10);
         
-        if (i < 3) {
-            doc.setDrawColor(226, 232, 240);
-            doc.setLineWidth(0.2);
-            doc.line(xOffset + w, currentY + 3, xOffset + w, currentY + 13);
+        if (i === 3) {
+            doc.setFontSize(6);
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(...colorSlate);
+            const info = calcMode === 'manual' ? `Manual: R$ ${globalDiaria.toFixed(2)}` : 'Automático por Funcionário';
+            doc.text(info, xOffset + 14, currentY + 14);
         }
         xOffset += w;
     }
@@ -924,10 +1024,10 @@ function generateReciboPDF(
     
     doc.setTextColor(...colorSlate);
     doc.setFontSize(7);
-    doc.text('VALOR DA DIÁRIA', secondCardX + 10, currentY + 7);
+    doc.text(calcMode === 'auto' ? 'CÁLCULO' : 'VALOR DA DIÁRIA', secondCardX + 10, currentY + 7);
     doc.setTextColor(15, 23, 42);
-    doc.setFontSize(14);
-    doc.text(formatCurrency(globalDiaria), secondCardX + 10, currentY + 16);
+    doc.setFontSize(calcMode === 'auto' ? 10 : 14);
+    doc.text(calcMode === 'auto' ? 'Automático (Individual)' : formatCurrency(globalDiaria), secondCardX + 10, currentY + 16);
 
     currentY += 32;
 
@@ -962,16 +1062,16 @@ function generateReciboPDF(
     autoTable(doc, {
       startY: currentY,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'VALOR']],
+      head: [['OBRA', 'HORAS', 'VALOR']],
       body: [
-        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), (w.mins / MINUTES_PER_DIARIA).toFixed(2), formatCurrency(w.cost)]),
-        ['TOTAL GERAL', subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
       bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } },
+      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center', fontStyle: 'bold' } },
       didParseCell: (data: any) => {
         if (data.row.index === workSummaryMap.size) {
             data.cell.styles.fillColor = colorBlue;
@@ -990,7 +1090,7 @@ function generateReciboPDF(
     });
 
     autoTable(doc, {
-      startY: currentY,
+      startY: currentY + 4,
       margin: { left: marginLeft, right: marginLeft },
       head: [['DATA', 'OBRA', 'ENTRADA - SAÍDA', 'HORAS', 'VALOR']],
       body: sortedData.map(p => [
@@ -1001,9 +1101,9 @@ function generateReciboPDF(
         formatCurrency(p.valorTotal)
       ]),
       theme: 'striped',
-      headStyles: { fillColor: colorBlue, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
-      bodyStyles: { fontSize: 7.5, halign: 'center', valign: 'middle', cellPadding: 1 },
-      columnStyles: { 0: { cellWidth: 26 }, 1: { halign: 'left' }, 2: { cellWidth: 40 }, 3: { cellWidth: 22 }, 4: { halign: 'right', fontStyle: 'bold', cellWidth: 30 } }
+      headStyles: { fillColor: colorBlue, fontSize: 8, halign: 'center', cellPadding: 1.2 },
+      bodyStyles: { fontSize: 7, halign: 'center', valign: 'middle', cellPadding: 0.8 },
+      columnStyles: { 0: { halign: 'center', cellWidth: 24 }, 1: { halign: 'center' }, 2: { halign: 'center', cellWidth: 32 }, 3: { halign: 'center', cellWidth: 18 }, 4: { halign: 'center', fontStyle: 'bold', cellWidth: 24 } }
     });
 
     currentY = (doc as any).lastAutoTable.finalY + 12;
@@ -1063,7 +1163,8 @@ function generateFechamentoPDF(
   filters: any, 
   users: UserData[], 
   works: Work[],
-  globalDiaria: number
+  globalDiaria: number,
+  calcMode: 'auto' | 'diaria' | 'manual'
 ) {
     const doc = new jsPDF('p', 'mm', 'a4');
     const pageWidth = 210;
@@ -1226,7 +1327,7 @@ function generateFechamentoPDF(
       headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 9, halign: 'center', cellPadding: 1.5 },
       bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1.5 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } }
+      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center', fontStyle: 'bold' } }
     });
 
     currentY = (doc as any).lastAutoTable.finalY + 10;
@@ -1246,16 +1347,16 @@ function generateFechamentoPDF(
     autoTable(doc, {
       startY: currentY + 5,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'TOTAL']],
+      head: [['OBRA', 'HORAS', 'TOTAL']],
       body: [
-        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), (w.mins / MINUTES_PER_DIARIA).toFixed(2), formatCurrency(w.cost)]),
-        ['TOTAL GERAL', subHoursTotal, subDiariasTotal.toFixed(2), formatCurrency(totalCostToDisplay)]
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: [51, 65, 85], fontSize: 9, halign: 'center', cellPadding: 1.5 },
       bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1.5 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' }, 3: { halign: 'right', fontStyle: 'bold' } },
+      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center', fontStyle: 'bold' } },
       didParseCell: (data) => {
         if (data.row.index === workSummaryMap.size) {
             data.cell.styles.fillColor = colorBlue;
@@ -1293,7 +1394,7 @@ function generateFechamentoPDF(
         if (!isLast) { doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.2); doc.line(x + colW, currentY + 5, x + colW, currentY + 25); }
     };
     
-    drawFinBlock(marginLeft, 'VALOR DA DIÁRIA BASE', formatCurrency(globalDiaria));
+    drawFinBlock(marginLeft, calcMode === 'auto' ? 'CÁLCULO' : 'MODO DE CÁLCULO', calcMode === 'auto' ? 'Automático por Func.' : `Manual (Base R$${globalDiaria.toFixed(2)})`);
     drawFinBlock(marginLeft + colW, 'TOTAL DE DIÁRIAS', subDiariasTotal.toFixed(2));
     drawFinBlock(marginLeft + colW * 2, 'TOTAL GERAL A PAGAR', formatCurrency(totalCostToDisplay), true);
 
@@ -1411,6 +1512,35 @@ interface PointSegmentRecord {
     acc: number;
     address: string;
   };
+}
+
+interface GPSData {
+  lat: number;
+  lng: number;
+  acc: number;
+  address: string;
+}
+
+interface IntervaloTrabalho {
+  obraId: string;
+  obraNome: string;
+  entrada: string;
+  saida: string;
+  minutos: number;
+  horasFormatadas: string;
+  valor: number;
+  observacoes: string[];
+  gpsEntrada?: GPSData;
+  gpsSaida?: GPSData;
+}
+
+interface ResumoRegistro {
+  totalMinutos: number;
+  totalHorasFormatadas: string;
+  valorTotal: number;
+  intervalos: IntervaloTrabalho[];
+  status: "TRABALHANDO" | "ENCERRADO" | "NAO_INICIADO" | "PAUSADO";
+  possuiInconsistencia: boolean;
 }
 
 interface PointRecord {
@@ -1802,7 +1932,7 @@ export default function App() {
         q = query(collection(db, 'points'), where('user_id', '==', user.id), orderBy('date', 'desc'));
       }
       
-      const unsubscribePoints = onSnapshot(q, async (snapshot) => {
+      const unsubscribePoints = onSnapshot(q, (snapshot) => {
         const pData = snapshot.docs.map(doc => {
           const data = doc.data() as any;
           // 🔥 PADRONIZA STATUS NA BUSCA (conforme solicitado)
@@ -1813,25 +1943,14 @@ export default function App() {
           return { ...data, id: doc.id, status } as PointRecord;
         });
         
-        // Recalculate total_hours for all points to ensure consistency
-        const updatedPoints: PointRecord[] = [];
+        // Recalculate total_hours for presentation only
         const recalculated = pData.map(p => {
-          const newTotal = calculateRecordMetrics(p).workedHours;
-          // Use string comparison for changes
-          if (newTotal !== p.total_hours) {
-            const updatedPoint = { ...p, total_hours: newTotal };
-            updatedPoints.push(updatedPoint);
-            return updatedPoint;
+          const metrics = calculateRecordMetrics(p);
+          if (metrics.workedHours !== p.total_hours) {
+            return { ...p, total_hours: metrics.workedHours };
           }
           return p;
         });
-        
-        if (updatedPoints.length > 0) {
-          // Update points in Firestore if calculation changed
-          for (const p of updatedPoints) {
-            await storage.savePoint(p);
-          }
-        }
         
         setPoints(recalculated);
       }, (error) => {
@@ -2551,10 +2670,11 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
     try {
       await storage.deleteUser(deleteConfirmation.id);
       
-      // Also delete their points
-      const allPoints = await storage.getPoints();
-      const filteredPoints = allPoints.filter(p => String(p.user_id) !== String(deleteConfirmation.id));
-      await storage.savePoints(filteredPoints);
+      // Also delete their points correctly
+      const userPoints = await storage.getPoints(deleteConfirmation.id);
+      for (const p of userPoints) {
+        await storage.deletePoint(p.id);
+      }
   
       await onRefresh();
       setDeleteConfirmation(null);
@@ -3180,6 +3300,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
       const allPoints = await storage.getPoints();
       let updatedCount = 0;
+      const pointsToSave: PointRecord[] = [];
 
       for (const name in groupedData) {
         const userObj = users.find(u => (u.name || '').toLowerCase() === String(name).toLowerCase() || (u.username || '').toLowerCase() === String(name).toLowerCase());
@@ -3192,7 +3313,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               (userObj ? String(p.user_id) === String(userObj.id) : p.user_name === name) && 
               p.date === dateStr
             );
-            let isNew = false;
 
             if (!point) {
               point = {
@@ -3210,7 +3330,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 status: WorkStatus.NAO_INICIADO,
                 editado_manual: 1
               };
-              isNew = true;
             }
 
             let changed = false;
@@ -3223,17 +3342,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             if (changed) {
               point.total_hours = calculateRecordMetrics(point).workedHours;
               point.status = calculateWorkStatus(point);
-              if (isNew) {
-                allPoints.push(point);
-              }
+              pointsToSave.push(point);
               updatedCount++;
             }
           }
         }
       }
 
-      if (updatedCount > 0) {
-        await storage.savePoints(allPoints);
+      if (pointsToSave.length > 0) {
+        await storage.savePoints(pointsToSave);
         await onRefresh();
         alert("Dados atualizados com sucesso");
       } else {
@@ -3281,11 +3398,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         saida2_lat: 0, saida2_lng: 0, saida2_acc: 0,
       };
 
-      const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0);
+      const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0, users);
       newPoint.total_hours = metrics.workedHours;
 
-      allPoints.push(newPoint);
-      await storage.savePoints(allPoints);
+      await storage.savePoint(newPoint);
 
       setIsManualModalOpen(false);
       setManualFormData({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
@@ -3330,7 +3446,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const filteredPoints = points.filter(p => {
     if (!validUserIds.has(String(p.user_id))) return false;
     if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-    if (filters.workId && !registroContemObra(p, filters.workId, works)) return false;
+    if (filters.workId && !registroContemObra(p, filters.workId, works, users)) return false;
     if (filters.startDate && p.date < filters.startDate) return false;
     if (filters.endDate && p.date > filters.endDate) return false;
     return true;
@@ -3777,11 +3893,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   <td className="px-6 py-4 text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
-                      {p.total_hours}
+                      {calcularResumoRegistro(p, undefined, works, users).totalHorasFormatadas}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end items-center gap-2 transition-opacity">
+                      <div className="text-right mr-2">
+                        <p className="text-[10px] font-bold text-emerald-500">R$ {calcularResumoRegistro(p, undefined, works, users).valorTotal.toFixed(2).replace('.', ',')}</p>
+                      </div>
                       {((p.observations && p.observations.length > 0) || p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                         <button 
                           onClick={() => showWarning(p)} 
@@ -3869,10 +3988,14 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </div>
 
               <div className="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800 overflow-x-auto gap-4">
-                <div className="space-y-1 min-w-fit">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</p>
-                  <p className="text-xs font-black text-white">{p.total_hours}</p>
-                </div>
+                  <div className="space-y-1 min-w-fit">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</p>
+                    <p className="text-xs font-black text-white">{calcularResumoRegistro(p, undefined, works, users).totalHorasFormatadas}</p>
+                  </div>
+                  <div className="space-y-1 min-w-fit">
+                    <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest text-right">Valor Total</p>
+                    <p className="text-xs font-black text-emerald-500 text-right">R$ {calcularResumoRegistro(p, undefined, works, users).valorTotal.toFixed(2).replace('.', ',')}</p>
+                  </div>
               </div>
 
               <div className="flex justify-end items-center pt-2">
@@ -4258,7 +4381,6 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
   const [exportType, setExportType] = useState<'pdf' | 'excel'>('pdf');
   const [calcMode, setCalcMode] = useState<'auto' | 'diaria' | 'manual'>('auto');
   const [globalDiariaValue, setGlobalDiariaValue] = useState<string>('180');
-  const [manualFinalValue, setManualFinalValue] = useState<string>('0');
   const [pdfDocType, setPdfDocType] = useState<'gerencial' | 'recibo' | 'fechamento'>('gerencial');
 
   const generateReport = () => {
@@ -4268,13 +4390,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const filtered = points.filter(p => {
       if (!validUserIds.has(String(p.user_id))) return false;
       if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-      if (filters.workId && !registroContemObra(p, filters.workId, works)) return false;
+      if (filters.workId && !registroContemObra(p, filters.workId, works, users)) return false;
       if (filters.startDate && p.date < filters.startDate) return false;
       if (filters.endDate && p.date > filters.endDate) return false;
       return true;
     });
 
-    const intervals = extractIntervalsFromPoints(filtered, users, works, undefined, undefined, 'auto', filters.workId);
+    const intervals = extractIntervalsFromPoints(filtered, users, works, undefined, globalDiariaValue, calcMode, filters.workId);
 
     setReportData(intervals);
 
@@ -4319,7 +4441,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
   useEffect(() => {
     generateReport();
-  }, [points, users, works]);
+  }, [points, users, works, calcMode, globalDiariaValue]);
 
   const handleOfficialExport = () => {
     setIsExportModalOpen(false);
@@ -4331,7 +4453,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const filtered = points.filter((p: any) => {
       if (!validUserIds.has(String(p.user_id))) return false;
       if (filters.userId && String(p.user_id) !== String(filters.userId)) return false;
-      if (filters.workId && !registroContemObra(p as PointRecord, filters.workId, works)) return false;
+      if (filters.workId && !registroContemObra(p as PointRecord, filters.workId, works, users)) return false;
       if (filters.startDate && p.date < filters.startDate) return false;
       if (filters.endDate && p.date > filters.endDate) return false;
       return true;
@@ -4340,12 +4462,8 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const userDefinedDiaria = parseFloat(globalDiariaValue) || undefined;
     const intervalsLocal = extractIntervalsFromPoints(filtered, users, works, userDefinedDiaria, globalDiariaValue, calcMode, filters.workId);
     
-    let totalC = 0;
-    if (calcMode === 'manual') {
-      totalC = parseFloat(manualFinalValue) || 0;
-    } else {
-        totalC = intervalsLocal.reduce((acc: number, curr: any) => acc + curr.valorTotal, 0);
-    }
+    // Always use the sum of intervals for the total cost
+    const totalC = intervalsLocal.reduce((acc: number, curr: any) => acc + curr.valorTotal, 0);
 
     if (exportType === 'pdf') {
        exportPDF(intervalsLocal, totalC);
@@ -4360,9 +4478,9 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const diaria = parseFloat(globalDiariaValue) || 180;
     
     if (pdfDocType === 'recibo') {
-      generateReciboPDF(finalData, totalCostToDisplay, filters, users, diaria);
+      generateReciboPDF(finalData, totalCostToDisplay, filters, users, diaria, calcMode);
     } else if (pdfDocType === 'fechamento') {
-      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, diaria);
+      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, diaria, calcMode);
     } else {
       generateOfficialReportPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
     }
@@ -4380,11 +4498,19 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Valor Total (R$)': p.valorTotal.toFixed(2)
     }));
 
-    const summaryData = workSummary.map(w => ({
-      'Obra': w.name,
-      'Funcionários': w.employeeCount,
-      'Total Horas': w.hours,
-      'Total Diárias': w.diarias,
+    const wMap: Record<string, { name: string, workers: Set<string>, mins: number, cost: number }> = {};
+    finalData.forEach(p => {
+      const canon = String(p.workName || 'EXTRA/OUTROS').trim().toUpperCase();
+      if (!wMap[canon]) wMap[canon] = { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, cost: 0 };
+      wMap[canon].workers.add(p.userId);
+      wMap[canon].mins += p.workedMinutes;
+      wMap[canon].cost += p.valorTotal;
+    });
+
+    const summaryData = Object.values(wMap).map(w => ({
+      'Obra': w.name.toUpperCase(),
+      'Funcionários': w.workers.size,
+      'Total Horas': formatarMinutos(w.mins),
       'Custo Total (R$)': w.cost.toFixed(2)
     }));
 
@@ -4463,6 +4589,40 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm text-white"
             />
           </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Cálculo de Diária</label>
+            <div className="flex gap-4 items-center h-10">
+              <label className="flex items-center gap-2 text-white text-sm cursor-pointer">
+                <input 
+                  type="radio" 
+                  checked={calcMode === 'auto'} 
+                  onChange={() => setCalcMode('auto')}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                Automático
+              </label>
+              <label className="flex items-center gap-2 text-white text-sm cursor-pointer">
+                <input 
+                  type="radio" 
+                  checked={calcMode === 'manual'} 
+                  onChange={() => setCalcMode('manual')}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                Personalizado
+              </label>
+            </div>
+          </div>
+          {calcMode === 'manual' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Valor Diária (R$)</label>
+              <input 
+                type="number" 
+                value={globalDiariaValue} 
+                onChange={e => setGlobalDiariaValue(e.target.value)}
+                className="w-full max-w-full box-border bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5 text-sm text-white"
+              />
+            </div>
+          )}
         </div>
         <div className="flex justify-between items-center mt-6">
           <div className="flex gap-3">
@@ -4482,30 +4642,21 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title={`Exportar Relatório (${exportType === 'pdf' ? 'PDF' : 'Excel'})`}>
         <div className="p-4 space-y-8 flex flex-col items-center max-w-sm mx-auto">
           <div className="w-full space-y-6">
-            {exportType === 'pdf' && (
-              <div className="space-y-2.5">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] ml-1">Tipo de Documento</label>
-                <select 
-                  value={pdfDocType} 
-                  onChange={e => setPdfDocType(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4 text-slate-100 font-bold text-base focus:ring-2 focus:ring-blue-500/20 transition-all cursor-pointer hover:border-slate-600 outline-none"
-                >
-                  <option value="gerencial">Relatório Gerencial</option>
-                  <option value="recibo">Recibo Individual</option>
-                  <option value="fechamento">Fechamento Mensal</option>
-                </select>
-              </div>
-            )}
-            
-            <Input 
-              label="Valor da Diária (R$)"
-              type="number" 
-              value={globalDiariaValue} 
-              onChange={e => setGlobalDiariaValue(e.target.value)} 
-              placeholder="Ex: 180"
-              required 
-            />
-          </div>
+      {exportType === 'pdf' && (
+        <div className="space-y-2.5">
+          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] ml-1">Tipo de Documento</label>
+          <select 
+            value={pdfDocType} 
+            onChange={e => setPdfDocType(e.target.value as any)}
+            className="w-full bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4 text-slate-100 font-bold text-base focus:ring-2 focus:ring-blue-500/20 transition-all cursor-pointer hover:border-slate-600 outline-none"
+          >
+            <option value="gerencial">Relatório Gerencial</option>
+            <option value="recibo">Recibo Individual</option>
+            <option value="fechamento">Fechamento Mensal</option>
+          </select>
+        </div>
+      )}
+    </div>
 
           <div className="w-full pt-2">
             <Button onClick={handleOfficialExport} className="w-full py-4 text-base font-black uppercase tracking-widest shadow-xl shadow-blue-900/10 active:scale-[0.98] transition-all bg-blue-600 hover:bg-blue-500">
@@ -4549,21 +4700,21 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Obra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Data</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">H. Trab.</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Valor</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Valor</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {reportData.map((p, idx) => (
                 <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-6 py-4 text-sm font-medium text-white">{p.userName}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400">{p.workName}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400 uppercase">{p.workName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {p.workedHoursStr}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-emerald-500">R$ {p.valorTotal.toFixed(2)}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">{formatCurrency(p.valorTotal)}</td>
                 </tr>
               ))}
               {reportData.length === 0 && (
@@ -4585,13 +4736,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <p className="text-xs text-slate-400 mt-0.5">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-emerald-500">R$ {p.valorTotal.toFixed(2)}</p>
+                  <p className="text-sm font-bold text-emerald-500">{formatCurrency(p.valorTotal)}</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 text-sm text-slate-300 bg-slate-800/30 p-2 rounded-lg border border-slate-800/50">
                 <MapPin size={14} className="text-orange-500 shrink-0" />
-                <span className="truncate">{p.workName}</span>
+                <span className="truncate uppercase">{p.workName}</span>
               </div>
 
               <div className="flex justify-between items-end">
@@ -4625,23 +4776,21 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nome da Obra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Funcionários</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Total Horas</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Total Diárias</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Custo Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {workSummary.map((w, idx) => (
                 <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-6 py-4 text-sm font-bold text-white">{w.name}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-white uppercase">{w.name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.employeeCount}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.hours}</td>
-                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{Number(w.diarias).toFixed(2)}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">R$ {w.cost.toFixed(2)}</td>
+                  <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">{formatCurrency(w.cost)}</td>
                 </tr>
               ))}
               {workSummary.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 italic">Nenhum dado de obra disponível.</td>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 italic">Nenhum dado de obra disponível.</td>
                 </tr>
               )}
             </tbody>
@@ -4655,15 +4804,15 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-2">
                   <HardHat size={16} className="text-orange-500 shrink-0" />
-                  <p className="text-base font-bold text-white">{w.name}</p>
+                  <p className="text-base font-bold text-white uppercase">{w.name}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-emerald-500">R$ {w.cost.toFixed(2)}</p>
+                  <p className="text-sm font-bold text-emerald-500">{formatCurrency(w.cost)}</p>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Custo Total</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Func.</p>
                   <p className="text-sm font-bold text-white">{w.employeeCount}</p>
@@ -4671,10 +4820,6 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Horas</p>
                   <p className="text-sm font-bold text-orange-500">{w.hours}</p>
-                </div>
-                <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Diárias</p>
-                  <p className="text-sm font-bold text-white">{Number(w.diarias).toFixed(2)}</p>
                 </div>
               </div>
             </div>
@@ -4938,8 +5083,9 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
     
     if (index !== -1) {
-      encerrar(allPoints[index]);
-      await storage.savePoints(allPoints);
+      const targetPoint = allPoints[index];
+      encerrar(targetPoint);
+      await storage.savePoint(targetPoint);
       loadTodayPoint();
       onRefresh();
     }
