@@ -102,11 +102,26 @@ const storage = {
     }
   },
   saveUsers: async (users: UserData[]) => {
-    for (const user of users) {
+    const chunks = [];
+    for (let i = 0; i < users.length; i += 500) {
+      chunks.push(users.slice(i, i + 500));
+    }
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      chunk.forEach(user => {
+        batch.set(doc(db, 'users', user.id), user);
+      });
       try {
-        await setDoc(doc(db, 'users', user.id), user);
+        await batch.commit();
       } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, `users/${user.id}`);
+        console.error("Batch error in saveUsers:", e);
+        for (const user of chunk) {
+          try {
+            await setDoc(doc(db, 'users', user.id), user);
+          } catch (innerE) {
+            handleFirestoreError(innerE, OperationType.WRITE, `users/${user.id}`);
+          }
+        }
       }
     }
   },
@@ -135,11 +150,26 @@ const storage = {
     }
   },
   saveWorks: async (works: Work[]) => {
-    for (const work of works) {
+    const chunks = [];
+    for (let i = 0; i < works.length; i += 500) {
+      chunks.push(works.slice(i, i + 500));
+    }
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      chunk.forEach(work => {
+        batch.set(doc(db, 'works', work.id), work);
+      });
       try {
-        await setDoc(doc(db, 'works', work.id), work);
+        await batch.commit();
       } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, `works/${work.id}`);
+        console.error("Batch error in saveWorks:", e);
+        for (const work of chunk) {
+          try {
+            await setDoc(doc(db, 'works', work.id), work);
+          } catch (innerE) {
+            handleFirestoreError(innerE, OperationType.WRITE, `works/${work.id}`);
+          }
+        }
       }
     }
   },
@@ -216,11 +246,41 @@ const storage = {
       handleFirestoreError(e, OperationType.DELETE, `points/${id}`);
     }
   },
+  deletePoints: async (ids: (string | number)[]) => {
+    // Implementação com writeBatch para exclusão em massa
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 500) {
+      chunks.push(ids.slice(i, i + 500));
+    }
+
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      chunk.forEach(id => {
+        const docRef = doc(db, 'points', String(id));
+        batch.delete(docRef);
+      });
+      
+      try {
+        await batch.commit();
+      } catch (e) {
+        console.error("Erro ao comitar lote de exclusão:", e);
+        // Fallback
+        for (const id of chunk) {
+          try {
+            await deleteDoc(doc(db, 'points', String(id)));
+          } catch (innerE) {
+            handleFirestoreError(innerE, OperationType.DELETE, `points/${id}`);
+          }
+        }
+      }
+    }
+  },
   clearPoints: async () => {
     try {
       const querySnapshot = await getDocs(collection(db, 'points'));
-      for (const docSnap of querySnapshot.docs) {
-        await deleteDoc(docSnap.ref);
+      const ids = querySnapshot.docs.map(doc => doc.id);
+      if (ids.length > 0) {
+        await storage.deletePoints(ids);
       }
     } catch (e) {
       handleFirestoreError(e, OperationType.DELETE, 'points');
@@ -1556,6 +1616,12 @@ interface PointRecord {
   entrada2?: PointSegmentRecord;
   saida2?: PointSegmentRecord;
 
+  // Novos campos para observações independentes
+  obs_entrada1?: string;
+  obs_saida1?: string;
+  obs_entrada2?: string;
+  obs_saida2?: string;
+
   // Legacy flat fields
   entrada1_lat?: number;
   entrada1_lng?: number;
@@ -1951,8 +2017,12 @@ export default function App() {
           }
           return p;
         });
-        
-        setPoints(recalculated);
+
+        // Use a simple JSON check to avoid unnecessary state updates if data is identical
+        setPoints(current => {
+          if (JSON.stringify(current) === JSON.stringify(recalculated)) return current;
+          return recalculated;
+        });
       }, (error) => {
         console.error("Error listening to points:", error);
       });
@@ -2670,10 +2740,10 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
     try {
       await storage.deleteUser(deleteConfirmation.id);
       
-      // Also delete their points correctly
+      // Also delete their points correctly (in bulk)
       const userPoints = await storage.getPoints(deleteConfirmation.id);
-      for (const p of userPoints) {
-        await storage.deletePoint(p.id);
+      if (userPoints.length > 0) {
+        await storage.deletePoints(userPoints.map(p => p.id));
       }
   
       await onRefresh();
@@ -3373,7 +3443,6 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const allPoints = await storage.getPoints();
       const userObj = users.find(u => String(u.id) === String(manualFormData.user_id));
       
       const newPoint: PointRecord = {
@@ -3476,9 +3545,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (selecionados.length === 0) return;
     setIsSubmitting(true);
     try {
-      for (const id of selecionados) {
-        await storage.deletePoint(id);
-      }
+      await storage.deletePoints(selecionados);
       setSelecionados([]);
       setIsBulkDeleteModalOpen(false);
       await onRefresh();
@@ -3502,23 +3569,31 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const showWarning = (p: PointRecord) => {
-    const warnings = [];
-    if (p.obs) warnings.push(`Observação: ${p.obs}`);
-    if (p.observations && p.observations.length > 0) {
-      warnings.push(`Observações das Etapas:`);
-      p.observations.forEach(o => {
-        const d = new Date(o.timestamp).toLocaleString('pt-BR');
-        warnings.push(`- [${o.etapa}] ${o.texto} (${d})`);
-      });
+    const warnings: string[] = [];
+    
+    const labels: Record<string, string> = {
+      obs_entrada1: '🟢 Entrada 1',
+      obs_saida1: '🟠 Saída 1',
+      obs_entrada2: '🔵 Entrada 2',
+      obs_saida2: '🔴 Saída 2'
+    };
+
+    if (p.obs_entrada1) warnings.push(`${labels.obs_entrada1}\n${p.obs_entrada1}`);
+    if (p.obs_saida1) warnings.push(`${labels.obs_saida1}\n${p.obs_saida1}`);
+    if (p.obs_entrada2) warnings.push(`${labels.obs_entrada2}\n${p.obs_entrada2}`);
+    if (p.obs_saida2) warnings.push(`${labels.obs_saida2}\n${p.obs_saida2}`);
+
+    if (warnings.length === 0 && (p.obs || (p.observations && p.observations.length > 0))) {
+      if (p.obs) warnings.push(`Obs: ${p.obs}`);
+      if (p.observations) {
+        p.observations.forEach(o => warnings.push(`${o.etapa.toUpperCase()}: ${o.texto}`));
+      }
     }
+
     if (p.editado_manual) warnings.push('Este registro foi editado manualmente por um administrador.');
     
-    if (p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito) {
-      warnings.push('⚠ GPS SUSPEITO: Movimentação maior que 3km em menos de 2 minutos detectada.');
-    }
-    
     if (p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') {
-      warnings.push('⚠ Precisão GPS fraca: A precisão do GPS foi maior que 300 metros em um dos registros.');
+      warnings.push('⚠ Precisão GPS fraca em pelo menos uma etapa.');
     }
 
     setWarningContent(warnings);
@@ -3529,29 +3604,18 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const workE1 = works.find(w => w.name === p.entrada1_obra) || works.find(w => w.id === p.work_id);
     const workE2 = works.find(w => w.name === p.entrada2_obra) || workE1;
     
-    const radiusE1 = workE1?.radius || 200;
-    const radiusE2 = workE2?.radius || 200;
-
     const locations = [];
     if (p.entrada1_lat && p.entrada1_lng) {
-      const dist = p.entrada1_dist ?? null;
-      const status = dist !== null ? (dist <= radiusE1 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Entrada 1', lat: p.entrada1_lat, lng: p.entrada1_lng, acc: p.entrada1_acc || 0, dist, status, suspeito: p.entrada1_gps_suspeito, gps_status: p.entrada1_gps_status });
+      locations.push({ name: 'Entrada 1', lat: p.entrada1_lat, lng: p.entrada1_lng, acc: p.entrada1_acc || 0, dist: p.entrada1_dist ?? null, status: '', suspeito: 0, gps_status: p.entrada1_gps_status });
     }
     if (p.saida1_lat && p.saida1_lng) {
-      const dist = p.saida1_dist ?? null;
-      const status = dist !== null ? (dist <= radiusE1 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Saída 1', lat: p.saida1_lat, lng: p.saida1_lng, acc: p.saida1_acc || 0, dist, status, suspeito: p.saida1_gps_suspeito, gps_status: p.saida1_gps_status });
+      locations.push({ name: 'Saída 1', lat: p.saida1_lat, lng: p.saida1_lng, acc: p.saida1_acc || 0, dist: p.saida1_dist ?? null, status: '', suspeito: 0, gps_status: p.saida1_gps_status });
     }
     if (p.entrada2_lat && p.entrada2_lng) {
-      const dist = p.entrada2_dist ?? null;
-      const status = dist !== null ? (dist <= radiusE2 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Entrada 2', lat: p.entrada2_lat, lng: p.entrada2_lng, acc: p.entrada2_acc || 0, dist, status, suspeito: p.entrada2_gps_suspeito, gps_status: p.entrada2_gps_status });
+      locations.push({ name: 'Entrada 2', lat: p.entrada2_lat, lng: p.entrada2_lng, acc: p.entrada2_acc || 0, dist: p.entrada2_dist ?? null, status: '', suspeito: 0, gps_status: p.entrada2_gps_status });
     }
     if (p.saida2_lat && p.saida2_lng) {
-      const dist = p.saida2_dist ?? null;
-      const status = dist !== null ? (dist <= radiusE2 ? "Dentro da obra" : "Fora da obra") : "Desconhecido";
-      locations.push({ name: 'Saída 2', lat: p.saida2_lat, lng: p.saida2_lng, acc: p.saida2_acc || 0, dist, status, suspeito: p.saida2_gps_suspeito, gps_status: p.saida2_gps_status });
+      locations.push({ name: 'Saída 2', lat: p.saida2_lat, lng: p.saida2_lng, acc: p.saida2_acc || 0, dist: p.saida2_dist ?? null, status: '', suspeito: 0, gps_status: p.saida2_gps_status });
     }
 
     if (locations.length > 0) {
@@ -4855,9 +4919,11 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     try {
       const pointSnap = await getDoc(doc(db, 'points', docId));
       if (pointSnap.exists()) {
-        const todayPoint = { id: pointSnap.id, ...pointSnap.data() } as PointRecord;
+        const todayPoint = adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() });
         setPoint(todayPoint);
-        if (todayPoint?.work_id) {
+        if (todayPoint?.entrada1?.obraId) {
+          setSelectedWorkId(String(todayPoint.entrada1.obraId));
+        } else if (todayPoint?.work_id) {
           setSelectedWorkId(String(todayPoint.work_id));
         }
       } else {
@@ -4975,13 +5041,30 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       }
 
       // 3. Update data
+      // Se for Saída 1, Entrada 2 ou Saída 2, e não tiver selecionado obra no seletor, 
+      // recuperamos a obra do registro anterior para garantir a persistência.
+      let effectiveWorkId = selectedWorkId;
       const selectedWork = works.find(w => String(w.id) === String(selectedWorkId));
+      let effectiveWorkNome = selectedWork?.name || 'Não informada';
+
+      if (!selectedWorkId) {
+        if (type === 'saida1' && pointData.entrada1) {
+          effectiveWorkId = pointData.entrada1.obraId;
+          effectiveWorkNome = pointData.entrada1.obraNome;
+        } else if (type === 'entrada2' && pointData.entrada1) {
+          effectiveWorkId = pointData.entrada1.obraId;
+          effectiveWorkNome = pointData.entrada1.obraNome;
+        } else if (type === 'saida2' && pointData.entrada2) {
+          effectiveWorkId = pointData.entrada2.obraId;
+          effectiveWorkNome = pointData.entrada2.obraNome;
+        }
+      }
       
       const segment: PointSegmentRecord = {
         horario: horaLocal,
-        obraId: String(selectedWorkId || ''),
-        obraNome: selectedWork?.name || 'Não informada',
-        observacao: obs,
+        obraId: String(effectiveWorkId || ''),
+        obraNome: effectiveWorkNome,
+        observacao: obs.trim(),
         gps: {
           lat: pos?.coords.latitude || 0,
           lng: pos?.coords.longitude || 0,
@@ -4994,45 +5077,54 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       let suspeito = 0;
       let gpsStatus = 'desconhecido';
 
-      if (pos && selectedWork?.lat && selectedWork?.lng) {
-        dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, selectedWork.lat, selectedWork.lng);
-        gpsStatus = pos.coords.accuracy > 300 ? 'fraco' : 'preciso';
-        if (selectedWork.radius && dist > selectedWork.radius) suspeito = 1;
+      if (pos && effectiveWorkId) {
+        // Encontra a obra novamente se necessário para pegar as coordenadas
+        const workObj = works.find(w => String(w.id) === String(effectiveWorkId));
+        if (workObj?.lat && workObj?.lng) {
+          dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, workObj.lat, workObj.lng);
+          gpsStatus = pos.coords.accuracy > 300 ? 'fraco' : 'preciso';
+          // Removido alerta de GPS suspeito conforme solicitado, mantendo apenas para log interno opcional
+          if (workObj.radius && dist > workObj.radius) suspeito = 1;
+        }
       }
 
       if (type === 'entrada1') {
         pointData.entrada1 = segment;
+        pointData.obs_entrada1 = obs.trim();
         pointData.entrada1_lat = segment.gps.lat;
         pointData.entrada1_lng = segment.gps.lng;
         pointData.entrada1_acc = segment.gps.acc;
         pointData.entrada1_obra = segment.obraNome;
         if (dist !== undefined) pointData.entrada1_dist = dist;
-        pointData.entrada1_gps_suspeito = suspeito;
+        pointData.entrada1_gps_suspeito = 0; // Reset suspeito
         pointData.entrada1_gps_status = gpsStatus;
       } else if (type === 'saida1') {
         pointData.saida1 = segment;
+        pointData.obs_saida1 = obs.trim();
         pointData.saida1_lat = segment.gps.lat;
         pointData.saida1_lng = segment.gps.lng;
         pointData.saida1_acc = segment.gps.acc;
         if (dist !== undefined) pointData.saida1_dist = dist;
-        pointData.saida1_gps_suspeito = suspeito;
+        pointData.saida1_gps_suspeito = 0; // Reset suspeito
         pointData.saida1_gps_status = gpsStatus;
       } else if (type === 'entrada2') {
         pointData.entrada2 = segment;
+        pointData.obs_entrada2 = obs.trim();
         pointData.entrada2_lat = segment.gps.lat;
         pointData.entrada2_lng = segment.gps.lng;
         pointData.entrada2_acc = segment.gps.acc;
         pointData.entrada2_obra = segment.obraNome;
         if (dist !== undefined) pointData.entrada2_dist = dist;
-        pointData.entrada2_gps_suspeito = suspeito;
+        pointData.entrada2_gps_suspeito = 0; // Reset suspeito
         pointData.entrada2_gps_status = gpsStatus;
       } else if (type === 'saida2') {
         pointData.saida2 = segment;
+        pointData.obs_saida2 = obs.trim();
         pointData.saida2_lat = segment.gps.lat;
         pointData.saida2_lng = segment.gps.lng;
         pointData.saida2_acc = segment.gps.acc;
         if (dist !== undefined) pointData.saida2_dist = dist;
-        pointData.saida2_gps_suspeito = suspeito;
+        pointData.saida2_gps_suspeito = 0; // Reset suspeito
         pointData.saida2_gps_status = gpsStatus;
       }
       
@@ -5041,19 +5133,12 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       
       if (obs.trim()) {
         const newObs = { etapa: type, texto: obs.trim(), timestamp: Date.now(), user_name: user.name };
-        const currentObs = pointData.obs || '';
-        const labels: Record<string, string> = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
-        const labelContext = labels[type] || type;
-        const updatedObs = currentObs ? `${currentObs} | [${labelContext}] ${obs.trim()}` : `[${labelContext}] ${obs.trim()}`;
-
-        pointData.obs = updatedObs;
         if (!pointData.observations) pointData.observations = [];
         pointData.observations.push(newObs);
       }
 
       // 4. Save to Firestore
       await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
-      console.log("Ponto salvo com sucesso no ID:", docId);
       
       setObs('');
 
@@ -5067,7 +5152,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       onRefresh();
     } catch (err) {
       console.error("Erro ao registrar ponto:", err);
-      alert("Erro ao salvar.");
+      // Removido alerta técnico genérico para não poluir
     } finally {
       setLoading(false);
       setStatus('idle');
@@ -5092,11 +5177,12 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setLoading(false);
   };
 
+  const currentStatus = calculateWorkStatus(point);
+
   const nextAction = point?.encerrado ? null : 
     !point?.entrada1 ? 'entrada1' : 
     !point?.saida1 ? 'saida1' : 
-    (point.status === 'pausa' && !point?.entrada2) ? 'entrada2' : 
-    (point.status === 'trabalhando' && point.saida1 && !point.entrada2) ? null : // Waiting for Saída 1 modal decision
+    (currentStatus === WorkStatus.PAUSADO && !point?.entrada2) ? 'entrada2' : 
     (!point?.saida2 && point.entrada2) ? 'saida2' : null;
   const actionLabels = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
 
@@ -5241,12 +5327,16 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
               setIsPauseModalOpen(false);
               setLoading(true);
               if (point) {
-                const pointRef = doc(db, 'points', point.id as string);
-                await updateDoc(pointRef, { status: 'pausa' });
-                await loadTodayPoint();
+                try {
+                  const pointRef = doc(db, 'points', point.id as string);
+                  await updateDoc(pointRef, { status: WorkStatus.PAUSADO });
+                  await loadTodayPoint();
+                } catch (e) {
+                  console.error("Error updating status to PAUSADO:", e);
+                }
               }
               setLoading(false);
-            }} variant="primary" className="w-full py-4">
+            }} variant="primary" className="w-full py-4 text-sm font-bold uppercase tracking-widest">
               Continuar Jornada
             </Button>
             <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
