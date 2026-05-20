@@ -3640,11 +3640,17 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     data.obs_entrada2 = getObservacaoDisplay(p.entrada2, p.obs_entrada2);
     data.obs_saida2 = getObservacaoDisplay(p.saida2, p.obs_saida2);
 
+    // Flatten obra fields as well to avoid crosstalk in the edit modal
+    data.entrada1_obra = getObraDisplay(p.entrada1, p.entrada1_obra);
+    data.entrada2_obra = getObraDisplay(p.entrada2, p.entrada2_obra);
+
     console.log("Carregando obs para edição (ADM):", {
       e1: data.obs_entrada1,
       s1: data.obs_saida1,
       e2: data.obs_entrada2,
-      s2: data.obs_saida2
+      s2: data.obs_saida2,
+      obra1: data.entrada1_obra,
+      obra2: data.entrada2_obra
     });
 
     setEditFormData(data);
@@ -4331,13 +4337,13 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <div className="grid grid-cols-2 gap-4">
               <Input label="Entrada 1" value={getHorarioDisplay(editFormData.entrada1)} onChange={e => setEditFormData({ ...editFormData, entrada1: e.target.value })} placeholder="00:00" />
               <Input label="Saída 1" value={getHorarioDisplay(editFormData.saida1)} onChange={e => setEditFormData({ ...editFormData, saida1: e.target.value })} placeholder="00:00" />
-              <Input label="Obs E1" value={getObservacaoDisplay(editFormData.entrada1, editFormData.obs_entrada1)} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs Entrada 1" />
-              <Input label="Obs S1" value={getObservacaoDisplay(editFormData.saida1, editFormData.obs_saida1)} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs Saída 1" />
+              <Input label="Obs E1" value={editFormData.obs_entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs Entrada 1" />
+              <Input label="Obs S1" value={editFormData.obs_saida1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs Saída 1" />
               
               <Input label="Entrada 2" value={getHorarioDisplay(editFormData.entrada2)} onChange={e => setEditFormData({ ...editFormData, entrada2: e.target.value })} placeholder="00:00" />
               <Input label="Saída 2" value={getHorarioDisplay(editFormData.saida2)} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
-              <Input label="Obs E2" value={getObservacaoDisplay(editFormData.entrada2, editFormData.obs_entrada2)} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs Entrada 2" />
-              <Input label="Obs S2" value={getObservacaoDisplay(editFormData.saida2, editFormData.obs_saida2)} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs Saída 2" />
+              <Input label="Obs E2" value={editFormData.obs_entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs Entrada 2" />
+              <Input label="Obs S2" value={editFormData.obs_saida2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs Saída 2" />
             </div>
             
             <div className="grid grid-cols-2 gap-4">
@@ -4358,8 +4364,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Obra Período 1" value={getObraDisplay(editFormData.entrada1, editFormData.entrada1_obra)} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
-              <Input label="Obra Período 2" value={getObraDisplay(editFormData.entrada2, editFormData.entrada2_obra)} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
+              <Input label="Obra Período 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
+              <Input label="Obra Período 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
             </div>
 
             <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700 space-y-4">
