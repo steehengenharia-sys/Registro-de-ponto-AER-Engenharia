@@ -2,8 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Clock, 
   User, 
-  MapPin, 
-  LogOut, 
   Users, 
   Calendar, 
   BarChart3, 
@@ -13,6 +11,14 @@ import {
   Eye, 
   CheckCircle2, 
   AlertCircle,
+  LogOut,
+  LogIn,
+  CheckCircle,
+  XCircle,
+  MapPin,
+  Activity,
+  Navigation,
+  Crosshair,
   ChevronRight,
   Menu,
   X,
@@ -1713,7 +1719,7 @@ export const ensurePointSegment = (val: any, obraId?: string, obraNome?: string,
       horario: getHorarioDisplay(val),
       obraId: val.obraId || obraId || '',
       obraNome: val.obraNome || obraNome || 'Não informada',
-      observacao: val.observacao || obs || '',
+      observacao: obs !== undefined ? obs : (val.observacao || ''),
       gps: val.gps || { lat: 0, lng: 0, acc: 0, address: '' }
     };
   }
@@ -1805,19 +1811,15 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
  */
 
 const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
-  if (!p || !p.entrada1 || !getHorarioDisplay(p.entrada1)) return WorkStatus.NAO_INICIADO;
-  
+  if (!p) return WorkStatus.NAO_INICIADO;
   if (p.encerrado) return WorkStatus.ENCERRADO;
-  // APENAS Saída 2 ou p.encerrado encerram a jornada.
+  if (p.status) return p.status as WorkStatus;
+
+  // Fallback
   if (p.saida2 && getHorarioDisplay(p.saida2) !== '--:--') return WorkStatus.ENCERRADO;
-  
   if (p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--') return WorkStatus.TRABALHANDO;
-  if (p.saida1 && getHorarioDisplay(p.saida1) !== '--:--') {
-    if (p.status === WorkStatus.PAUSADO) return WorkStatus.PAUSADO;
-    // Se saiu e não fechou, continua como TRABALHANDO_1 ou Pausado (neste caso, ainda trabalhamos)
-    return WorkStatus.TRABALHANDO_1;
-  }
-  if (p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--') return WorkStatus.TRABALHANDO_1;
+  if (p.saida1 && getHorarioDisplay(p.saida1) !== '--:--') return WorkStatus.PAUSADO;
+  if (p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--') return WorkStatus.TRABALHANDO;
   
   return WorkStatus.NAO_INICIADO;
 };
@@ -3613,17 +3615,55 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const handleEditPoint = (p: PointRecord) => {
-    setEditFormData({ ...p });
+    const data: any = { ...p };
+    // Flatten GPS nested data into root properties for UI binding in edit modal
+    if (p.entrada1?.gps) {
+      data.entrada1_lat = p.entrada1.gps.lat || p.entrada1_lat || 0;
+      data.entrada1_lng = p.entrada1.gps.lng || p.entrada1_lng || 0;
+    }
+    if (p.saida1?.gps) {
+      data.saida1_lat = p.saida1.gps.lat || p.saida1_lat || 0;
+      data.saida1_lng = p.saida1.gps.lng || p.saida1_lng || 0;
+    }
+    if (p.entrada2?.gps) {
+      data.entrada2_lat = p.entrada2.gps.lat || p.entrada2_lat || 0;
+      data.entrada2_lng = p.entrada2.gps.lng || p.entrada2_lng || 0;
+    }
+    if (p.saida2?.gps) {
+      data.saida2_lat = p.saida2.gps.lat || p.saida2_lat || 0;
+      data.saida2_lng = p.saida2.gps.lng || p.saida2_lng || 0;
+    }
+
+    // Flatten observations from nested segments into root properties for edit modal binding
+    data.obs_entrada1 = getObservacaoDisplay(p.entrada1, p.obs_entrada1);
+    data.obs_saida1 = getObservacaoDisplay(p.saida1, p.obs_saida1);
+    data.obs_entrada2 = getObservacaoDisplay(p.entrada2, p.obs_entrada2);
+    data.obs_saida2 = getObservacaoDisplay(p.saida2, p.obs_saida2);
+
+    console.log("Carregando obs para edição (ADM):", {
+      e1: data.obs_entrada1,
+      s1: data.obs_saida1,
+      e2: data.obs_entrada2,
+      s2: data.obs_saida2
+    });
+
+    setEditFormData(data);
     setIsEditModalOpen(true);
   };
 
   const showWarning = (p: PointRecord) => {
     const warnings: string[] = [];
     
-    if (p.obs_entrada1) warnings.push(`🟢 Entrada 1: ${p.obs_entrada1}`);
-    if (p.obs_saida1) warnings.push(`🟠 Saída 1: ${p.obs_saida1}`);
-    if (p.obs_entrada2) warnings.push(`🔵 Entrada 2: ${p.obs_entrada2}`);
-    if (p.obs_saida2) warnings.push(`🔴 Saída 2: ${p.obs_saida2}`);
+    // Check both root obs fields and nested segment observations
+    const obsE1 = getObservacaoDisplay(p.entrada1, p.obs_entrada1);
+    const obsS1 = getObservacaoDisplay(p.saida1, p.obs_saida1);
+    const obsE2 = getObservacaoDisplay(p.entrada2, p.obs_entrada2);
+    const obsS2 = getObservacaoDisplay(p.saida2, p.obs_saida2);
+
+    if (obsE1) warnings.push(`🟢 Entrada 1: ${obsE1}`);
+    if (obsS1) warnings.push(`🟠 Saída 1: ${obsS1}`);
+    if (obsE2) warnings.push(`🔵 Entrada 2: ${obsE2}`);
+    if (obsS2) warnings.push(`🔴 Saída 2: ${obsS2}`);
 
     if (warnings.length === 0 && (p.obs || (p.observations && p.observations.length > 0))) {
       if (p.obs) warnings.push(`Obs Geral: ${p.obs}`);
@@ -3646,22 +3686,26 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const showLocation = (p: PointRecord) => {
-    const workE1 = works.find(w => w.name === p.entrada1_obra) || works.find(w => w.id === p.work_id);
-    const workE2 = works.find(w => w.name === p.entrada2_obra) || workE1;
+    const locations: any[] = [];
     
-    const locations = [];
-    if (p.entrada1_lat && p.entrada1_lng) {
-      locations.push({ name: 'Entrada 1', lat: p.entrada1_lat, lng: p.entrada1_lng, acc: p.entrada1_acc || 0, dist: p.entrada1_dist ?? null, status: '', suspeito: 0, gps_status: p.entrada1_gps_status });
-    }
-    if (p.saida1_lat && p.saida1_lng) {
-      locations.push({ name: 'Saída 1', lat: p.saida1_lat, lng: p.saida1_lng, acc: p.saida1_acc || 0, dist: p.saida1_dist ?? null, status: '', suspeito: 0, gps_status: p.saida1_gps_status });
-    }
-    if (p.entrada2_lat && p.entrada2_lng) {
-      locations.push({ name: 'Entrada 2', lat: p.entrada2_lat, lng: p.entrada2_lng, acc: p.entrada2_acc || 0, dist: p.entrada2_dist ?? null, status: '', suspeito: 0, gps_status: p.entrada2_gps_status });
-    }
-    if (p.saida2_lat && p.saida2_lng) {
-      locations.push({ name: 'Saída 2', lat: p.saida2_lat, lng: p.saida2_lng, acc: p.saida2_acc || 0, dist: p.saida2_dist ?? null, status: '', suspeito: 0, gps_status: p.saida2_gps_status });
-    }
+    const extract = (seg: PointSegmentRecord | undefined, label: string, legacyLat?: any, legacyLng?: any, legacyAcc?: any, legacyDist?: any) => {
+      if ((seg && seg.gps && seg.gps.lat) || (legacyLat && legacyLng)) {
+        locations.push({
+          name: label,
+          lat: seg?.gps?.lat || legacyLat,
+          lng: seg?.gps?.lng || legacyLng,
+          acc: seg?.gps?.acc || legacyAcc || 0,
+          dist: seg?.gps?.dist ?? legacyDist,
+          address: seg?.gps?.address || '',
+          horario: seg?.horario || '--:--'
+        });
+      }
+    };
+
+    extract(p.entrada1, 'Entrada 1', p.entrada1_lat, p.entrada1_lng, p.entrada1_acc, p.entrada1_dist);
+    extract(p.saida1, 'Saída 1', p.saida1_lat, p.saida1_lng, p.saida1_acc, p.saida1_dist);
+    extract(p.entrada2, 'Entrada 2', p.entrada2_lat, p.entrada2_lng, p.entrada2_acc, p.entrada2_dist);
+    extract(p.saida2, 'Saída 2', p.saida2_lat, p.saida2_lng, p.saida2_acc, p.saida2_dist);
 
     if (locations.length > 0) {
       setLocationData(locations);
@@ -3678,27 +3722,47 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     try {
       const userObj = users.find(u => String(u.id) === String(editFormData.user_id));
 
-      // Re-standardize all segments before saving
+      const mergeGPS = (originalSeg: any, currentSeg: any, lat: any, lng: any) => {
+        // Use GPS from currentSeg if it's an object, otherwise try originalSeg
+        const baseGps = (currentSeg && typeof currentSeg === 'object' && currentSeg.gps) 
+          ? currentSeg.gps 
+          : (originalSeg && typeof originalSeg === 'object' && originalSeg.gps) 
+            ? originalSeg.gps 
+            : {};
+
+        return {
+          ...baseGps,
+          lat: (lat !== undefined && lat !== '') ? Number(lat) : (baseGps.lat || 0),
+          lng: (lng !== undefined && lng !== '') ? Number(lng) : (baseGps.lng || 0)
+        };
+      };
+
+      // We need to keep a reference to original objects before ensurePointSegment possibly simplifies them
+      const oldEntrada1 = editFormData.entrada1;
+      const oldSaida1 = editFormData.saida1;
+      const oldEntrada2 = editFormData.entrada2;
+      const oldSaida2 = editFormData.saida2;
+
+      // Re-standardize all segments before saving while preserving GPS
       const finalized: PointRecord = {
         ...editFormData,
         entrada1: ensurePointSegment(editFormData.entrada1, '', editFormData.entrada1_obra, editFormData.obs_entrada1),
         saida1: ensurePointSegment(editFormData.saida1, '', '', editFormData.obs_saida1),
         entrada2: ensurePointSegment(editFormData.entrada2, '', editFormData.entrada2_obra, editFormData.obs_entrada2),
         saida2: ensurePointSegment(editFormData.saida2, '', '', editFormData.obs_saida2),
-        editado_manual: 1,
-        // Status should be re-calculated based on the saved times, not taken from the form
-        status: WorkStatus.TRABALHANDO_1 // Initialize with placeholder
+        editado_manual: 1
       };
 
-      // Recalculate status properly based on times
-      finalized.status = calculateWorkStatus(finalized);
-      // do not automatically set finalized.encerrado = 1 just because status changed to ENCERRADO during edit.
+      // Apply coordinates back from the flattened fields, preserving metadata from original segments
+      if (finalized.entrada1) finalized.entrada1.gps = mergeGPS(oldEntrada1, finalized.entrada1, editFormData.entrada1_lat, editFormData.entrada1_lng);
+      if (finalized.saida1) finalized.saida1.gps = mergeGPS(oldSaida1, finalized.saida1, editFormData.saida1_lat, editFormData.saida1_lng);
+      if (finalized.entrada2) finalized.entrada2.gps = mergeGPS(oldEntrada2, finalized.entrada2, editFormData.entrada2_lat, editFormData.entrada2_lng);
+      if (finalized.saida2) finalized.saida2.gps = mergeGPS(oldSaida2, finalized.saida2, editFormData.saida2_lat, editFormData.saida2_lng);
 
       const metrics = calculateRecordMetrics(finalized, userObj?.valor_diaria || 0);
       finalized.total_hours = metrics.workedHours;
       
-      console.log("Enviando para Firestore:", finalized);
-      // Ensure we sanitize properly, including obra objects
+      console.log("Enviando para Firestore (Admin Edit):", finalized);
       await setDoc(doc(db, "points", finalized.id), sanitizePointData(finalized));
       
       setIsEditModalOpen(false);
@@ -4019,7 +4083,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                       <div className="text-right mr-2">
                         <p className="text-[10px] font-bold text-emerald-500">R$ {calcularResumoRegistro(p, undefined, works, users).valorTotal.toFixed(2).replace('.', ',')}</p>
                       </div>
-                      {((p.observations && p.observations.length > 0) || p.obs || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
+                      {((p.observations && p.observations.length > 0) || p.obs || p.obs_entrada1 || p.obs_saida1 || p.obs_entrada2 || p.obs_saida2 || p.entrada1?.observacao || p.saida1?.observacao || p.entrada2?.observacao || p.saida2?.observacao || p.editado_manual || p.entrada1_gps_suspeito || p.saida1_gps_suspeito || p.entrada2_gps_suspeito || p.saida2_gps_suspeito || p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') ? (
                         <button 
                           onClick={() => showWarning(p)} 
                           className={`p-2 rounded-lg transition-all ${
@@ -4189,49 +4253,73 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
       <Modal isOpen={isLocationModalOpen} onClose={() => setIsLocationModalOpen(false)} title="Localizações do Registro">
         {locationData && (
-          <div className="space-y-4">
-            {locationData.map((loc, index) => (
-              <div key={index} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 space-y-3">
-                <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-                  <span className="text-white font-bold">{loc.name}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-sm">Precisão do GPS</span>
-                  <span className="text-white font-mono text-sm">{loc.acc.toFixed(1)}m</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-sm">Distância da obra</span>
-                  <span className="text-white font-mono text-sm">{loc.dist !== null ? `${loc.dist.toFixed(1)}m` : 'N/A'}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-sm">Status</span>
-                  <span className={`font-bold text-sm ${loc.status === 'Dentro da obra' ? 'text-emerald-500' : loc.status === 'Fora da obra' ? 'text-orange-500' : 'text-slate-400'}`}>
-                    {loc.status}
-                  </span>
-                </div>
-                {loc.gps_status === 'fraco' && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400 text-sm">Precisão</span>
-                    <span className="font-bold text-sm text-red-500">Fraca (&gt; 300m)</span>
-                  </div>
-                )}
-                {loc.suspeito === 1 && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400 text-sm">Alerta</span>
-                    <span className="font-bold text-sm text-red-500">GPS SUSPEITO</span>
-                  </div>
-                )}
-                <Button 
-                  onClick={() => window.open(`https://maps.google.com/?q=${loc.lat},${loc.lng}`, '_blank')} 
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white border-none flex items-center justify-center gap-2 mt-2"
+          <div className="space-y-4 py-4">
+            {locationData.map((loc, index) => {
+              const dStatus = getDistanceStatus(loc.dist);
+              const isInside = dStatus?.isInside;
+              const isEntry = loc.name.toLowerCase().includes('entrada');
+              
+              return (
+                <div 
+                  key={index} 
+                  className="p-4 bg-slate-900/40 rounded-2xl border border-slate-800/50 space-y-4"
                 >
-                  <MapPin size={16} />
-                  Abrir no Google Maps
-                </Button>
-              </div>
-            ))}
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-xl ${isEntry ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+                      {isEntry ? <LogIn size={20} /> : <LogOut size={20} />}
+                    </div>
+                    <p className="text-lg font-bold text-white">{loc.name}</p>
+                  </div>
+
+                  <div className="space-y-3 px-1">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        <Crosshair size={16} />
+                        <span className="text-sm">Precisão do GPS</span>
+                      </div>
+                      <span className="text-sm font-medium text-slate-200">{Math.round(loc.acc)} m</span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        <MapPin size={16} />
+                        <span className="text-sm">Distância da obra</span>
+                      </div>
+                      <span className={`text-sm font-black ${isInside ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {dStatus?.formattedDist || '---'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className={`flex items-center gap-2 p-3 rounded-xl border ${
+                    isInside 
+                      ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-500' 
+                      : 'bg-red-500/5 border-red-500/20 text-red-500'
+                  }`}>
+                    {isInside ? <CheckCircle size={18} /> : <XCircle size={18} />}
+                    <span className="text-sm font-bold uppercase tracking-tight">{dStatus?.label}</span>
+                  </div>
+
+                  <Button 
+                    onClick={() => window.open(`https://maps.google.com/?q=${loc.lat},${loc.lng}`, '_blank')} 
+                    className="w-full py-3 flex items-center justify-center gap-2 bg-linear-to-r from-orange-600 to-orange-500 border-none shadow-lg shadow-orange-600/10 text-xs font-bold uppercase tracking-widest"
+                    variant="primary"
+                  >
+                    <MapPin size={16} />
+                    Ver Mapa
+                  </Button>
+                </div>
+              );
+            })}
+
             <div className="pt-2">
-              <Button variant="secondary" onClick={() => setIsLocationModalOpen(false)} className="w-full">Fechar</Button>
+              <Button 
+                variant="secondary" 
+                onClick={() => setIsLocationModalOpen(false)} 
+                className="w-full py-4 bg-slate-800/50 border-slate-800 hover:bg-slate-800 uppercase font-black tracking-[0.2em] text-[10px]"
+              >
+                Fechar Localizações
+              </Button>
             </div>
           </div>
         )}
@@ -4460,25 +4548,42 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   );
 }
 
+function getDistanceStatus(dist: number) {
+  if (dist === undefined || dist === null) return null;
+  const isInside = dist <= 300;
+  const label = isInside ? 'Dentro da obra' : 'Fora da obra';
+  const color = isInside ? 'text-emerald-500' : 'text-red-500';
+  const formattedDist = dist >= 1000 ? `${(dist / 1000).toFixed(1)}km` : `${Math.round(dist)}m`;
+  return { label, color, formattedDist, isInside };
+}
+
 function PointDetail({ label, time }: { label: string, time: any }) {
   const gps = time?.gps;
+  const distStatus = gps?.dist !== undefined ? getDistanceStatus(gps.dist) : null;
+  
   return (
     <div className="p-4 bg-slate-900 rounded-2xl border border-slate-700">
       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</p>
       <p className="text-xl font-black text-white mb-2">{getHorarioDisplay(time)}</p>
       {gps && (
         <div className="text-[10px] text-slate-400">
-          <p>{gps.address || 'Localização não disponível'}</p>
+          <p className="line-clamp-2 mb-1">{gps.address || 'Localização não disponível'}</p>
           {gps.lat && gps.lng && (
             <button 
               onClick={() => window.open(`https://maps.google.com/?q=${gps.lat},${gps.lng}`, '_blank')}
-              className="text-orange-500 hover:underline mt-1 block"
+              className="text-orange-500 hover:underline mt-1 block font-bold"
             >
-              Abrir no Maps (lat: {gps.lat}, lng: {gps.lng})
+              Abrir no Maps
             </button>
           )}
-          {gps.dist !== undefined && gps.dist !== null && (
-            <p className="mt-1 text-orange-500 font-bold">Distância da obra: {Math.round(gps.dist)}m</p>
+          {distStatus && (
+            <div className="mt-2 flex items-center gap-2">
+               <span className={`font-black ${distStatus.color} uppercase tracking-tight`}>
+                 {distStatus.label}
+               </span>
+               <span className="text-slate-500">•</span>
+               <span className="text-slate-300 font-bold">{distStatus.formattedDist}</span>
+            </div>
           )}
         </div>
       )}
@@ -5085,6 +5190,8 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           }
       }
       
+      console.log("Comentário a ser salvo:", type, obs.trim());
+
       const segment: PointSegmentRecord = {
         horario: horaLocal,
         obraId: String(effectiveWorkId || ''),
@@ -5129,21 +5236,38 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       pointData.last_timestamp = Date.now();
       
       // Atomic status update based on type and extraData
-      if (type === 'entrada1') pointData.status = WorkStatus.TRABALHANDO_1;
-      else if (type === 'saida1') {
-          pointData.status = (extraData?.choice === 'encerrar') ? WorkStatus.ENCERRADO : WorkStatus.PAUSADO;
-          if (extraData?.choice === 'encerrar') pointData.encerrado = 1;
+      if (type === 'entrada1') {
+          pointData.status = WorkStatus.TRABALHANDO;
+          pointData.encerrado = 0;
+      } else if (type === 'saida1') {
+          const isClosing = extraData?.choice === 'encerrar';
+          pointData.status = isClosing ? WorkStatus.ENCERRADO : WorkStatus.PAUSADO;
+          pointData.encerrado = isClosing ? 1 : 0;
+      } else if (type === 'entrada2') {
+          pointData.status = WorkStatus.TRABALHANDO;
+          pointData.encerrado = 0;
+      } else if (type === 'saida2') {
+          pointData.status = WorkStatus.ENCERRADO;
+          pointData.encerrado = 1;
       }
-      else if (type === 'entrada2') pointData.status = WorkStatus.TRABALHANDO_2;
-      else if (type === 'saida2') pointData.status = WorkStatus.ENCERRADO;
+
+      console.log("Saving point data with observation:", {
+        type,
+        obs: obs.trim(),
+        pointId: pointData.id
+      });
 
       // Update Firebase
       await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
       
+      console.log("Point successfully saved to Firestore");
+
       // Cleanup UI
       setObs('');
       setLastRegisteredTime(horaLocal);
       setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      
       await loadTodayPoint();
       onRefresh();
       
@@ -5156,39 +5280,40 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     }
   };
 
-  const handleFinishDay = async () => {
-    if (isRegistering) return;
-    setIsRegistering(true);
+  const registrarEntrada1 = async () => {
+    if (!selectedWorkId) { alert('Selecione uma obra.'); return; }
+    await registerPoint('entrada1');
+  };
+
+  const registrarSaida1 = () => { setIsPauseModalOpen(true); };
+
+  const continuarJornada = async () => {
     setIsPauseModalOpen(false);
-    setLoading(true);
-    
-    try {
-        const allPoints = await storage.getPoints(user.id);
-        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-        const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
-        
-        if (index !== -1) {
-        const targetPoint = allPoints[index];
-        encerrar(targetPoint);
-        await storage.savePoint(targetPoint);
-        loadTodayPoint();
-        onRefresh();
-        }
-    } catch (e) {
-        console.error("Error finishing day:", e);
-    } finally {
-        setLoading(false);
-        setIsRegistering(false);
-    }
+    await registerPoint('saida1', null, { choice: 'continuar' });
+  };
+
+  const encerrarJornada = async () => {
+    setIsPauseModalOpen(false);
+    await registerPoint('saida1', null, { choice: 'encerrar' });
+  };
+
+  const registrarEntrada2 = async () => {
+    // If not selected now, try to use earlier obra if possible, but keep it simple
+    await registerPoint('entrada2');
+  };
+
+  const registrarSaida2 = async () => {
+    await registerPoint('saida2');
   };
 
   const currentStatus = calculateWorkStatus(point);
 
   const nextAction = point?.encerrado ? null : 
-    getHorarioDisplay(point?.entrada1) === '--:--' ? 'entrada1' : 
-    getHorarioDisplay(point?.saida1) === '--:--' ? 'saida1' : 
-    (currentStatus === WorkStatus.PAUSADO && getHorarioDisplay(point?.entrada2) === '--:--') ? 'entrada2' : 
-    (getHorarioDisplay(point?.saida2) === '--:--' && getHorarioDisplay(point?.entrada2) !== '--:--') ? 'saida2' : null;
+    (getHorarioDisplay(point?.entrada1) === '--:--') ? 'entrada1' : 
+    (getHorarioDisplay(point?.saida1) === '--:--') ? 'saida1' : 
+    (getHorarioDisplay(point?.entrada2) === '--:--') ? 'entrada2' : 
+    (getHorarioDisplay(point?.saida2) === '--:--') ? 'saida2' : null;
+
   const actionLabels = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
 
   return (
@@ -5287,11 +5412,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
             
             <Button 
               onClick={() => {
-                if (nextAction === 'saida1') {
-                  setIsPauseModalOpen(true);
-                } else {
-                  registerPoint(nextAction as any);
-                }
+                if (nextAction === 'entrada1') registrarEntrada1();
+                else if (nextAction === 'saida1') registrarSaida1();
+                else if (nextAction === 'entrada2') registrarEntrada2();
+                else if (nextAction === 'saida2') registrarSaida2();
               }}
               className="w-full py-6 text-xl rounded-2xl shadow-2xl"
               disabled={isRegistering}
@@ -5311,10 +5435,34 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       </Card>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <PointMiniCard label="Entrada 1" time={getHorarioDisplay(point?.entrada1)} active={getHorarioDisplay(point?.entrada1) !== '--:--'} obra={getObraDisplay(point?.entrada1, point?.work_name)} />
-        <PointMiniCard label="Saída 1" time={getHorarioDisplay(point?.saida1)} active={getHorarioDisplay(point?.saida1) !== '--:--'} obra={getObraDisplay(point?.saida1)} />
-        <PointMiniCard label="Entrada 2" time={getHorarioDisplay(point?.entrada2)} active={getHorarioDisplay(point?.entrada2) !== '--:--'} obra={getObraDisplay(point?.entrada2)} />
-        <PointMiniCard label="Saída 2" time={getHorarioDisplay(point?.saida2)} active={getHorarioDisplay(point?.saida2) !== '--:--'} obra={getObraDisplay(point?.saida2)} />
+        <PointMiniCard 
+          label="Entrada 1" 
+          time={getHorarioDisplay(point?.entrada1)} 
+          active={getHorarioDisplay(point?.entrada1) !== '--:--' || nextAction === 'entrada1'} 
+          isNext={nextAction === 'entrada1'}
+          obra={getObraDisplay(point?.entrada1, point?.work_name)} 
+        />
+        <PointMiniCard 
+          label="Saída 1" 
+          time={getHorarioDisplay(point?.saida1)} 
+          active={getHorarioDisplay(point?.saida1) !== '--:--' || nextAction === 'saida1'} 
+          isNext={nextAction === 'saida1'}
+          obra={getObraDisplay(point?.saida1)} 
+        />
+        <PointMiniCard 
+          label="Entrada 2" 
+          time={getHorarioDisplay(point?.entrada2)} 
+          active={getHorarioDisplay(point?.entrada2) !== '--:--' || nextAction === 'entrada2'} 
+          isNext={nextAction === 'entrada2'}
+          obra={getObraDisplay(point?.entrada2)} 
+        />
+        <PointMiniCard 
+          label="Saída 2" 
+          time={getHorarioDisplay(point?.saida2)} 
+          active={getHorarioDisplay(point?.saida2) !== '--:--' || nextAction === 'saida2'} 
+          isNext={nextAction === 'saida2'}
+          obra={getObraDisplay(point?.saida2)} 
+        />
       </div>
 
       {point && (
@@ -5334,16 +5482,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         <div className="space-y-6">
           <p className="text-slate-300">Deseja encerrar a jornada ou continuar depois?</p>
           <div className="grid grid-cols-1 gap-3">
-             <Button onClick={async () => {
-              setIsPauseModalOpen(false);
-              await registerPoint('saida1', null, { choice: 'continuar' });
-            }} variant="primary" className="w-full py-4 text-sm font-bold uppercase tracking-widest">
+             <Button onClick={continuarJornada} variant="primary" className="w-full py-4 text-sm font-bold uppercase tracking-widest">
               Continuar Jornada
             </Button>
-            <Button onClick={async () => {
-              setIsPauseModalOpen(false);
-              await registerPoint('saida1', null, { choice: 'encerrar' });
-            }} variant="secondary" className="w-full py-4">
+            <Button onClick={encerrarJornada} variant="secondary" className="w-full py-4">
               Encerrar Jornada
             </Button>
           </div>
@@ -5353,12 +5495,14 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   );
 }
 
-function PointMiniCard({ label, time, active, obra }: { label: string, time?: string, active: boolean, obra?: string }) {
+function PointMiniCard({ label, time, active, isNext, obra }: { label: string, time?: string, active: boolean, isNext?: boolean, obra?: string }) {
   return (
     <div className={`
-      p-4 rounded-2xl border transition-all text-center
+      p-4 rounded-2xl border transition-all text-center relative overflow-hidden
       ${active ? 'bg-slate-800 border-orange-600/50 shadow-lg' : 'bg-slate-900 border-slate-800 opacity-40'}
+      ${isNext ? 'ring-2 ring-orange-500 ring-offset-2 ring-offset-slate-900' : ''}
     `}>
+      {isNext && <div className="absolute top-0 left-0 w-full h-1 bg-orange-500" />}
       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{label}</p>
       <p className={`text-lg font-black ${active ? 'text-white' : 'text-slate-700'}`}>{time || '--:--'}</p>
       {active && obra && <p className="text-[9px] font-bold text-orange-500 uppercase mt-1 truncate">{obra}</p>}
