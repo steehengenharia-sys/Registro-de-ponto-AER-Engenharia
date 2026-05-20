@@ -316,10 +316,13 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c; // in metres
 }
 
-function calcularPeriodo(inicio: string, fim: string): number {
-  if (!inicio || !fim || !inicio.includes(':') || !fim.includes(':')) return 0;
-  const [h1, m1] = inicio.split(':').map(Number);
-  const [h2, m2] = fim.split(':').map(Number);
+function calcularPeriodo(inicio: any, fim: any): number {
+  const i = typeof inicio === 'string' ? inicio : getHorarioDisplay(inicio);
+  const f = typeof fim === 'string' ? fim : getHorarioDisplay(fim);
+  
+  if (!i || !f || i === '--:--' || f === '--:--' || !i.includes(':') || !f.includes(':')) return 0;
+  const [h1, m1] = i.split(':').map(Number);
+  const [h2, m2] = f.split(':').map(Number);
   if (isNaN(h1) || isNaN(m1) || isNaN(h2) || isNaN(m2)) return 0;
   
   // Cálculo em minutos (Regra Principal)
@@ -1571,6 +1574,9 @@ interface PointSegmentRecord {
     lng: number;
     acc: number;
     address: string;
+    dist?: number;
+    status?: string;
+    suspeito?: number;
   };
 }
 
@@ -1579,6 +1585,9 @@ interface GPSData {
   lng: number;
   acc: number;
   address: string;
+  dist?: number;
+  status?: string;
+  suspeito?: number;
 }
 
 interface IntervaloTrabalho {
@@ -1667,55 +1676,98 @@ interface PointRecord {
 // --- Data Adaptation ---
 
 export const getHorarioDisplay = (val: any): string => {
+  if (!val) return '--:--';
   if (typeof val === 'string') return val || '--:--';
-  if (val && typeof val === 'object' && val.horario) return val.horario;
+  if (typeof val === 'object') {
+     if (typeof val.horario === 'string') return val.horario || '--:--';
+     if (val.horario) return String(val.horario);
+  }
   return '--:--';
 };
 
-export const getObraDisplay = (val: any, legacyFallback?: string): string => {
-  if (val && typeof val === 'object' && val.obraNome) return val.obraNome;
-  if (typeof val === 'string') return val;
-  return legacyFallback || 'Não informada';
+export const getObraDisplay = (val: any, legacyFallback?: any): string => {
+  if (!val) {
+    return (typeof legacyFallback === 'string') ? legacyFallback : 'Não informada';
+  }
+  
+  if (typeof val === 'object') {
+    if (typeof val.obraNome === 'string') return val.obraNome;
+  }
+  
+  return (typeof val === 'string') ? val : ((typeof legacyFallback === 'string') ? legacyFallback : 'Não informada');
+};
+
+export const getObservacaoDisplay = (val: any, legacyFallback?: string): string => {
+  if (!val) return legacyFallback || '';
+  if (typeof val === 'object') {
+    if (typeof val.observacao === 'string') return val.observacao || legacyFallback || '';
+    if (val.observacao) return String(val.observacao);
+  }
+  if (typeof val === 'string') return val || legacyFallback || '';
+  return legacyFallback || '';
+};
+
+export const ensurePointSegment = (val: any, obraId?: string, obraNome?: string, obs?: string): PointSegmentRecord => {
+  if (val && typeof val === 'object' && val.horario !== undefined) {
+    return {
+      horario: getHorarioDisplay(val),
+      obraId: val.obraId || obraId || '',
+      obraNome: val.obraNome || obraNome || 'Não informada',
+      observacao: val.observacao || obs || '',
+      gps: val.gps || { lat: 0, lng: 0, acc: 0, address: '' }
+    };
+  }
+  
+  return {
+    horario: getHorarioDisplay(val),
+    obraId: obraId || '',
+    obraNome: obraNome || 'Não informada',
+    observacao: obs || '',
+    gps: { lat: 0, lng: 0, acc: 0, address: '' }
+  };
 };
 
 const adaptLegacyPoint = (data: any): PointRecord => {
-  if (data.entrada1 && typeof data.entrada1 === 'object') {
-     return data;
-  }
+  if (!data) return data;
 
   const newP: PointRecord = {
     ...data,
     status: data.status || WorkStatus.NAO_INICIADO,
-    entrada1: {
-      horario: data.entrada1 || '',
-      obraId: data.entrada1_obra || data.work_id || '',
-      obraNome: data.entrada1_obra_nome || data.work_name || '',
-      observacao: '',
-      gps: { lat: data.entrada1_lat || 0, lng: data.entrada1_lng || 0, acc: data.entrada1_acc || 0, address: data.entrada1_address || '' }
-    },
-    // Repeat for other segments saia1, entrada2, saida2
-    saida1: {
-      horario: data.saida1 || '',
-      obraId: data.saida1_obra || '',
-      obraNome: data.saida1_obra_nome || '',
-      observacao: '',
-      gps: { lat: data.saida1_lat || 0, lng: data.saida1_lng || 0, acc: data.saida1_acc || 0, address: data.saida1_address || '' }
-    },
-    entrada2: {
-      horario: data.entrada2 || '',
-      obraId: data.entrada2_obra || '',
-      obraNome: data.entrada2_obra_nome || '',
-      observacao: '',
-      gps: { lat: data.entrada2_lat || 0, lng: data.entrada2_lng || 0, acc: data.entrada2_acc || 0, address: data.entrada2_address || '' }
-    },
-    saida2: {
-      horario: data.saida2 || '',
-      obraId: data.saida2_obra || '',
-      obraNome: data.saida2_obra_nome || '',
-      observacao: '',
-      gps: { lat: data.saida2_lat || 0, lng: data.saida2_lng || 0, acc: data.saida2_acc || 0, address: data.saida2_address || '' }
-    }
   };
+
+  // Convert all segments to the official object structure
+  newP.entrada1 = ensurePointSegment(data.entrada1, data.work_id, data.entrada1_obra || data.work_name, data.obs_entrada1);
+  newP.saida1 = ensurePointSegment(data.saida1, '', '', data.obs_saida1);
+  newP.entrada2 = ensurePointSegment(data.entrada2, '', data.entrada2_obra || data.entrada1_obra || data.work_name, data.obs_entrada2);
+  newP.saida2 = ensurePointSegment(data.saida2, '', '', data.obs_saida2);
+
+  // Sync legacy fields if they exist to the new objects if objects were empty but legacy fields had data
+  if (newP.entrada1.horario === '--:--' && data.entrada1 && typeof data.entrada1 === 'string') {
+    newP.entrada1.horario = data.entrada1;
+  }
+  
+  // Ensure GPS data is migrated if missing from segments
+  if (newP.entrada1.gps.lat === 0 && data.entrada1_lat) {
+     newP.entrada1.gps = { 
+       lat: data.entrada1_lat, 
+       lng: data.entrada1_lng || 0, 
+       acc: data.entrada1_acc || 0, 
+       address: data.entrada1_address || '',
+       dist: data.entrada1_dist,
+       status: data.entrada1_gps_status,
+       suspeito: data.entrada1_gps_suspeito
+     };
+  }
+  if (newP.saida1.gps.lat === 0 && data.saida1_lat) {
+     newP.saida1.gps = { lat: data.saida1_lat, lng: data.saida1_lng || 0, acc: data.saida1_acc || 0, address: data.saida1_address || '', dist: data.saida1_dist, status: data.saida1_gps_status, suspeito: data.saida1_gps_suspeito };
+  }
+  if (newP.entrada2.gps.lat === 0 && data.entrada2_lat) {
+     newP.entrada2.gps = { lat: data.entrada2_lat, lng: data.entrada2_lng || 0, acc: data.entrada2_acc || 0, address: data.entrada2_address || '', dist: data.entrada2_dist, status: data.entrada2_gps_status, suspeito: data.entrada2_gps_suspeito };
+  }
+  if (newP.saida2.gps.lat === 0 && data.saida2_lat) {
+     newP.saida2.gps = { lat: data.saida2_lat, lng: data.saida2_lng || 0, acc: data.saida2_acc || 0, address: data.saida2_address || '', dist: data.saida2_dist, status: data.saida2_gps_status, suspeito: data.saida2_gps_suspeito };
+  }
+
   return newP;
 };
 
@@ -1753,16 +1805,19 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
  */
 
 const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
-  if (!p || !p.entrada1) return WorkStatus.NAO_INICIADO;
+  if (!p || !p.entrada1 || !getHorarioDisplay(p.entrada1)) return WorkStatus.NAO_INICIADO;
   
   if (p.encerrado) return WorkStatus.ENCERRADO;
-  if (p.saida2) return WorkStatus.ENCERRADO;
-  if (p.entrada2) return WorkStatus.TRABALHANDO;
-  if (p.saida1) {
+  // APENAS Saída 2 ou p.encerrado encerram a jornada.
+  if (p.saida2 && getHorarioDisplay(p.saida2) !== '--:--') return WorkStatus.ENCERRADO;
+  
+  if (p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--') return WorkStatus.TRABALHANDO;
+  if (p.saida1 && getHorarioDisplay(p.saida1) !== '--:--') {
     if (p.status === WorkStatus.PAUSADO) return WorkStatus.PAUSADO;
-    return WorkStatus.ENCERRADO;
+    // Se saiu e não fechou, continua como TRABALHANDO_1 ou Pausado (neste caso, ainda trabalhamos)
+    return WorkStatus.TRABALHANDO_1;
   }
-  if (p.entrada1) return WorkStatus.TRABALHANDO;
+  if (p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--') return WorkStatus.TRABALHANDO_1;
   
   return WorkStatus.NAO_INICIADO;
 };
@@ -2001,12 +2056,9 @@ export default function App() {
       const unsubscribePoints = onSnapshot(q, (snapshot) => {
         const pData = snapshot.docs.map(doc => {
           const data = doc.data() as any;
-          // 🔥 PADRONIZA STATUS NA BUSCA (conforme solicitado)
-          const status = (data.status === "ENCERRADO" || data.status === "Encerrado") 
-            ? WorkStatus.ENCERRADO 
-            : WorkStatus.TRABALHANDO;
+          const status = data.status || calculateWorkStatus(adaptLegacyPoint({ ...data, id: doc.id }));
           
-          return { ...data, id: doc.id, status } as PointRecord;
+          return adaptLegacyPoint({ ...data, id: doc.id, status });
         });
         
         // Recalculate total_hours for presentation only
@@ -2026,7 +2078,7 @@ export default function App() {
       }, (error) => {
         console.error("Error listening to points:", error);
       });
-      
+
       return () => {
         unsubscribeWorks();
         unsubscribePoints();
@@ -2260,7 +2312,9 @@ function LoginPage({ deferredPrompt, setDeferredPrompt }: { deferredPrompt: any,
       await signInWithEmailAndPassword(auth, email, password);
       // No need to manually call onLogin here, onAuthStateChanged in App will handle it.
     } catch (e: any) {
-      console.error("Erro de autenticação:", e.message || e);
+      if (e.code !== 'auth/invalid-credential' && e.code !== 'auth/wrong-password' && e.code !== 'auth/user-not-found') {
+        console.error("Erro de autenticação:", e.message || e);
+      }
       switch (e.code) {
         case 'auth/invalid-credential':
         case 'auth/user-not-found':
@@ -3165,10 +3219,10 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PointHistoryItem label="Entrada 1" time={p.entrada1?.horario || '--:--'} obra={p.entrada1?.obraNome || p.work_name} />
-              <PointHistoryItem label="Saída 1" time={p.saida1?.horario || '--:--'} obra={p.saida1?.obraNome} />
-              <PointHistoryItem label="Entrada 2" time={p.entrada2?.horario || '--:--'} obra={p.entrada2?.obraNome || p.entrada1?.obraNome || p.work_name} />
-              <PointHistoryItem label="Saída 2" time={p.saida2?.horario || '--:--'} obra={p.saida2?.obraNome} />
+              <PointHistoryItem label="Entrada 1" time={getHorarioDisplay(p.entrada1)} obra={getObraDisplay(p.entrada1, p.work_name)} />
+              <PointHistoryItem label="Saída 1" time={getHorarioDisplay(p.saida1)} obra={getObraDisplay(p.saida1)} />
+              <PointHistoryItem label="Entrada 2" time={getHorarioDisplay(p.entrada2)} obra={getObraDisplay(p.entrada2, getObraDisplay(p.entrada1, p.work_name))} />
+              <PointHistoryItem label="Saída 2" time={getHorarioDisplay(p.saida2)} obra={getObraDisplay(p.saida2)} />
             </div>
           </Card>
         ))}
@@ -3451,21 +3505,18 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         funcionario_id: String(manualFormData.user_id),
         user_name: userObj?.name || '---',
         date: manualFormData.date,
-        entrada1: typeof manualFormData.entrada1 === 'string' ? { horario: manualFormData.entrada1, obraId: '', obraNome: manualFormData.entrada1_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.entrada1,
-        saida1: typeof manualFormData.saida1 === 'string' ? { horario: manualFormData.saida1, obraId: '', obraNome: manualFormData.entrada1_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.saida1,
-        entrada2: typeof manualFormData.entrada2 === 'string' ? { horario: manualFormData.entrada2, obraId: '', obraNome: manualFormData.entrada2_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.entrada2,
-        saida2: typeof manualFormData.saida2 === 'string' ? { horario: manualFormData.saida2, obraId: '', obraNome: manualFormData.entrada2_obra || '', observacao: '', gps: { lat:0, lng:0, acc:0, address:'' } } : manualFormData.saida2,
+        entrada1: ensurePointSegment(manualFormData.entrada1, '', manualFormData.entrada1_obra),
+        saida1: ensurePointSegment(manualFormData.saida1, '', manualFormData.entrada1_obra),
+        entrada2: ensurePointSegment(manualFormData.entrada2, '', manualFormData.entrada2_obra),
+        saida2: ensurePointSegment(manualFormData.saida2, '', manualFormData.entrada2_obra),
         entrada1_obra: manualFormData.entrada1_obra,
         entrada2_obra: manualFormData.entrada2_obra,
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
-        status: manualFormData.manual_status || WorkStatus.NAO_INICIADO,
-        entrada1_lat: 0, entrada1_lng: 0, entrada1_acc: 0,
-        saida1_lat: 0, saida1_lng: 0, saida1_acc: 0,
-        entrada2_lat: 0, entrada2_lng: 0, entrada2_acc: 0,
-        saida2_lat: 0, saida2_lng: 0, saida2_acc: 0,
-      };
+        status: manualFormData.manual_status || WorkStatus.ENCERRADO,
+        last_timestamp: Date.now()
+      } as PointRecord;
 
       const metrics = calculateRecordMetrics(newPoint, userObj?.valor_diaria || 0, users);
       newPoint.total_hours = metrics.workedHours;
@@ -3475,6 +3526,9 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       setIsManualModalOpen(false);
       setManualFormData({ user_id: '', date: '', entrada1: '', saida1: '', entrada2: '', saida2: '', entrada1_obra: '', entrada2_obra: '', obs: '' });
       await onRefresh();
+    } catch (err) {
+      console.error("Error saving manual point:", err);
+      alert("Erro ao salvar registro manual.");
     } finally {
       setIsSubmitting(false);
     }
@@ -3559,44 +3613,35 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   };
 
   const handleEditPoint = (p: PointRecord) => {
-    // 🔥 CORREÇÃO DO STATUS AO ABRIR EDIÇÃO
-    const status = (p.status === WorkStatus.ENCERRADO || String(p.status).toUpperCase() === "ENCERRADO")
-      ? WorkStatus.ENCERRADO
-      : WorkStatus.TRABALHANDO;
-
-    setEditFormData({ ...p, status });
+    setEditFormData({ ...p });
     setIsEditModalOpen(true);
   };
 
   const showWarning = (p: PointRecord) => {
     const warnings: string[] = [];
     
-    const labels: Record<string, string> = {
-      obs_entrada1: '🟢 Entrada 1',
-      obs_saida1: '🟠 Saída 1',
-      obs_entrada2: '🔵 Entrada 2',
-      obs_saida2: '🔴 Saída 2'
-    };
-
-    if (p.obs_entrada1) warnings.push(`${labels.obs_entrada1}\n${p.obs_entrada1}`);
-    if (p.obs_saida1) warnings.push(`${labels.obs_saida1}\n${p.obs_saida1}`);
-    if (p.obs_entrada2) warnings.push(`${labels.obs_entrada2}\n${p.obs_entrada2}`);
-    if (p.obs_saida2) warnings.push(`${labels.obs_saida2}\n${p.obs_saida2}`);
+    if (p.obs_entrada1) warnings.push(`🟢 Entrada 1: ${p.obs_entrada1}`);
+    if (p.obs_saida1) warnings.push(`🟠 Saída 1: ${p.obs_saida1}`);
+    if (p.obs_entrada2) warnings.push(`🔵 Entrada 2: ${p.obs_entrada2}`);
+    if (p.obs_saida2) warnings.push(`🔴 Saída 2: ${p.obs_saida2}`);
 
     if (warnings.length === 0 && (p.obs || (p.observations && p.observations.length > 0))) {
-      if (p.obs) warnings.push(`Obs: ${p.obs}`);
+      if (p.obs) warnings.push(`Obs Geral: ${p.obs}`);
       if (p.observations) {
-        p.observations.forEach(o => warnings.push(`${o.etapa.toUpperCase()}: ${o.texto}`));
+        p.observations.forEach(o => {
+          const emoji = o.etapa === 'entrada1' ? '🟢' : o.etapa === 'saida1' ? '🟠' : o.etapa === 'entrada2' ? '🔵' : '🔴';
+          warnings.push(`${emoji} ${o.etapa.toUpperCase()}: ${o.texto}`);
+        });
       }
     }
 
-    if (p.editado_manual) warnings.push('Este registro foi editado manualmente por um administrador.');
+    if (p.editado_manual) warnings.push('📝 Registro editado manualmente.');
     
-    if (p.entrada1_gps_status === 'fraco' || p.saida1_gps_status === 'fraco' || p.entrada2_gps_status === 'fraco' || p.saida2_gps_status === 'fraco') {
-      warnings.push('⚠ Precisão GPS fraca em pelo menos uma etapa.');
+    if (p.entrada1?.gps?.status === 'fraco' || p.saida1?.gps?.status === 'fraco' || p.entrada2?.gps?.status === 'fraco' || p.saida2?.gps?.status === 'fraco') {
+      warnings.push('⚠ GPS com baixa precisão detectado.');
     }
 
-    setWarningContent(warnings);
+    setWarningContent(Array.from(new Set(warnings))); // Deduplicate
     setIsWarningModalOpen(true);
   };
 
@@ -3631,21 +3676,30 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // 🔥 MAPEIA STATUS PARA O BANCO (ENCERRADO ou TRABALHANDO)
-      const payloadStatus = editFormData.status === WorkStatus.ENCERRADO ? "ENCERRADO" : "TRABALHANDO";
-
       const userObj = users.find(u => String(u.id) === String(editFormData.user_id));
-      const metrics = calculateRecordMetrics(editFormData, userObj?.valor_diaria || 0);
 
-      const updated = { 
-        ...editFormData, 
+      // Re-standardize all segments before saving
+      const finalized: PointRecord = {
+        ...editFormData,
+        entrada1: ensurePointSegment(editFormData.entrada1, '', editFormData.entrada1_obra, editFormData.obs_entrada1),
+        saida1: ensurePointSegment(editFormData.saida1, '', '', editFormData.obs_saida1),
+        entrada2: ensurePointSegment(editFormData.entrada2, '', editFormData.entrada2_obra, editFormData.obs_entrada2),
+        saida2: ensurePointSegment(editFormData.saida2, '', '', editFormData.obs_saida2),
         editado_manual: 1,
-        status: payloadStatus,
-        total_hours: metrics.workedHours
+        // Status should be re-calculated based on the saved times, not taken from the form
+        status: WorkStatus.TRABALHANDO_1 // Initialize with placeholder
       };
+
+      // Recalculate status properly based on times
+      finalized.status = calculateWorkStatus(finalized);
+      // do not automatically set finalized.encerrado = 1 just because status changed to ENCERRADO during edit.
+
+      const metrics = calculateRecordMetrics(finalized, userObj?.valor_diaria || 0);
+      finalized.total_hours = metrics.workedHours;
       
-      console.log("Enviando para Firestore:", updated);
-      await updateDoc(doc(db, "points", editFormData.id), updated);
+      console.log("Enviando para Firestore:", finalized);
+      // Ensure we sanitize properly, including obra objects
+      await setDoc(doc(db, "points", finalized.id), sanitizePointData(finalized));
       
       setIsEditModalOpen(false);
       onRefresh();
@@ -4187,12 +4241,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         {editFormData && (
           <form onSubmit={saveEditPoint} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Data" type="date" value={editFormData.date || ''} onChange={e => setEditFormData({ ...editFormData, date: e.target.value })} />
-              <div />
-              <Input label="Entrada 1" value={editFormData.entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, entrada1: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 1" value={editFormData.saida1 || ''} onChange={e => setEditFormData({ ...editFormData, saida1: e.target.value })} placeholder="00:00" />
-              <Input label="Entrada 2" value={editFormData.entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, entrada2: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 2" value={editFormData.saida2 || ''} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
+              <Input label="Entrada 1" value={getHorarioDisplay(editFormData.entrada1)} onChange={e => setEditFormData({ ...editFormData, entrada1: e.target.value })} placeholder="00:00" />
+              <Input label="Saída 1" value={getHorarioDisplay(editFormData.saida1)} onChange={e => setEditFormData({ ...editFormData, saida1: e.target.value })} placeholder="00:00" />
+              <Input label="Obs E1" value={getObservacaoDisplay(editFormData.entrada1, editFormData.obs_entrada1)} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs Entrada 1" />
+              <Input label="Obs S1" value={getObservacaoDisplay(editFormData.saida1, editFormData.obs_saida1)} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs Saída 1" />
+              
+              <Input label="Entrada 2" value={getHorarioDisplay(editFormData.entrada2)} onChange={e => setEditFormData({ ...editFormData, entrada2: e.target.value })} placeholder="00:00" />
+              <Input label="Saída 2" value={getHorarioDisplay(editFormData.saida2)} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
+              <Input label="Obs E2" value={getObservacaoDisplay(editFormData.entrada2, editFormData.obs_entrada2)} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs Entrada 2" />
+              <Input label="Obs S2" value={getObservacaoDisplay(editFormData.saida2, editFormData.obs_saida2)} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs Saída 2" />
             </div>
             
             <div className="grid grid-cols-2 gap-4">
@@ -4213,19 +4270,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Obra Período 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
-              <Input label="Obra Período 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status da Jornada</label>
-              <select 
-                value={editFormData.status} 
-                onChange={e => setEditFormData({ ...editFormData, status: e.target.value as WorkStatus })}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all"
-              >
-                <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
-                <option value={WorkStatus.ENCERRADO}>Encerrado</option>
-              </select>
+              <Input label="Obra Período 1" value={getObraDisplay(editFormData.entrada1, editFormData.entrada1_obra)} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
+              <Input label="Obra Período 2" value={getObraDisplay(editFormData.entrada2, editFormData.entrada2_obra)} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
             </div>
 
             <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700 space-y-4">
@@ -4414,11 +4460,28 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   );
 }
 
-function PointDetail({ label, time }: { label: string, time: string }) {
+function PointDetail({ label, time }: { label: string, time: any }) {
+  const gps = time?.gps;
   return (
     <div className="p-4 bg-slate-900 rounded-2xl border border-slate-700">
       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</p>
-      <p className="text-xl font-black text-white mb-2">{time || '--:--'}</p>
+      <p className="text-xl font-black text-white mb-2">{getHorarioDisplay(time)}</p>
+      {gps && (
+        <div className="text-[10px] text-slate-400">
+          <p>{gps.address || 'Localização não disponível'}</p>
+          {gps.lat && gps.lng && (
+            <button 
+              onClick={() => window.open(`https://maps.google.com/?q=${gps.lat},${gps.lng}`, '_blank')}
+              className="text-orange-500 hover:underline mt-1 block"
+            >
+              Abrir no Maps (lat: {gps.lat}, lng: {gps.lng})
+            </button>
+          )}
+          {gps.dist !== undefined && gps.dist !== null && (
+            <p className="mt-1 text-orange-500 font-bold">Distância da obra: {Math.round(gps.dist)}m</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -4903,6 +4966,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [point, setPoint] = useState<PointRecord | null>(null);
   const [selectedWorkId, setSelectedWorkId] = useState<string | ''>('');
   const [loading, setLoading] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
   const [obs, setObs] = useState('');
   const [status, setStatus] = useState<'idle' | 'locating' | 'refining' | 'saving'>('idle');
   const [accuracy, setAccuracy] = useState<number | null>(null);
@@ -4938,99 +5002,66 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     loadTodayPoint(); 
   }, [loadTodayPoint]);
 
-  const registerPoint = async (type: 'entrada1' | 'saida1' | 'entrada2' | 'saida2', customPos?: any) => {
-    console.log("Registrando ponto:", type, "Para usuario:", user?.id);
-    if (!user) { alert("Usuário não encontrado."); return; }
-    if ((type === 'entrada1' || type === 'entrada2') && !selectedWorkId) {
-      alert('Selecione a obra.'); return;
-    }
-
-    if (point?.last_timestamp && (Date.now() - point.last_timestamp < 30000)) {
-      alert('Aguarde 30 segundos para registrar o próximo ponto.'); return;
+  const registerPoint = async (type: 'entrada1' | 'saida1' | 'entrada2' | 'saida2', customPos?: any, extraData?: any) => {
+    if (isRegistering) {
+        console.log("Registro já em andamento, ignorando.");
+        return; 
     }
     
-    // Sequential validation
-    if (type === 'saida1' && !point?.entrada1) { alert('Aguarde Entrada 1 primeiro.'); return; }
-    if (type === 'entrada2' && !point?.saida1) { alert('Aguarde Saída 1 primeiro.'); return; }
-    if (type === 'saida2' && !point?.entrada2) { alert('Aguarde Entrada 2 primeiro.'); return; }
-
-    setLoading(true);
+    // Check for obra only on entries
+    if ((type === 'entrada1' || type === 'entrada2') && !selectedWorkId) {
+      alert('Selecione uma obra antes de registrar.');
+      return;
+    }
+    
+    // Prevent double-clicking within a short timeframe
+    if (point?.last_timestamp && (Date.now() - point.last_timestamp < 5000)) {
+       alert('Aguarde alguns segundos para registrar novamente.');
+       return;
+    }
+    
+    setIsRegistering(true);
     setStatus('locating');
     
+    console.log("Iniciando registro:", type, "Usuário:", user?.id, "Extra:", extraData);
+    
     try {
+      // 1. Get Location
+      let pos: GeolocationPosition | null = null;
+      try {
+          pos = customPos || await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { 
+                enableHighAccuracy: true, 
+                timeout: 10000, 
+                maximumAge: 0 
+            });
+          });
+          console.log("GPS capturado:", pos);
+      } catch (e) {
+          console.error("Erro GPS (não capturado):", e);
+      }
+
+      // 2. Fetch point data
       const agora = new Date();
       const horaLocal = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
       const dataLocal = agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
       const docId = `${user.id}_${dataLocal}`;
       const pointRef = doc(db, 'points', docId);
 
-      // 1. Fetch current document or create it if missing
       const pointSnap = await getDoc(pointRef);
-      let pointData: PointRecord;
-
-      if (pointSnap.exists()) {
-        pointData = adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() });
-      } else {
-        pointData = {
-          id: docId,
-          user_id: String(user.id),
-          funcionario_id: String(user.id),
-          user_name: user.name,
-          date: dataLocal,
-          obs: '',
-          total_hours: '00:00',
-          status: WorkStatus.NAO_INICIADO
+      let pointData: PointRecord = pointSnap.exists() 
+        ? adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() })
+        : {
+            id: docId,
+            user_id: String(user.id),
+            funcionario_id: String(user.id),
+            user_name: user.name,
+            date: dataLocal,
+            total_hours: '00:00',
+            status: WorkStatus.NAO_INICIADO
         } as PointRecord;
-      }
 
-      // 2. Perform location lookup
-      let pos: GeolocationPosition | null = null;
-      if (customPos) {
-        pos = customPos;
-      } else {
-        try {
-          pos = await new Promise((resolve, reject) => {
-            let watchId: number;
-            let timeoutId: any;
-            let bestPos: GeolocationPosition | null = null;
-            
-            const finish = (finalPos: GeolocationPosition | null, err?: any) => {
-              if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
-              if (timeoutId !== undefined) clearTimeout(timeoutId);
-              if (finalPos) resolve(finalPos);
-              else reject(err || new Error('Location not found'));
-            };
-
-            timeoutId = setTimeout(() => {
-              finish(bestPos, new Error('Timeout waiting for better accuracy'));
-            }, 15000); // 15s max timeout
-
-            watchId = navigator.geolocation.watchPosition(
-              (p) => {
-                bestPos = p;
-                if (p.coords.accuracy <= 50) { // If accuracy is 50m or better, we are good
-                  finish(p);
-                }
-              },
-              (err) => {
-                if (!bestPos) finish(null, err); // Only reject if we don't have ANY position yet
-              },
-              { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
-            );
-          });
-        } catch (e) {
-          console.error("Geo error (high accuracy)", e);
-          // Try a simple fallback without high accuracy just in case
-          try {
-            pos = await new Promise((resolve, reject) => {
-              navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
-            });
-          } catch (fallbackErr) {
-            console.error("Geo fallback error", fallbackErr);
-          }
-        }
-      }
-
+      // 3. Process Segment
       let address = "Localização não obtida";
       if (pos) {
         try {
@@ -5040,24 +5071,18 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         } catch (e) { }
       }
 
-      // 3. Update data
-      // Se for Saída 1, Entrada 2 ou Saída 2, e não tiver selecionado obra no seletor, 
-      // recuperamos a obra do registro anterior para garantir a persistência.
       let effectiveWorkId = selectedWorkId;
-      const selectedWork = works.find(w => String(w.id) === String(selectedWorkId));
-      let effectiveWorkNome = selectedWork?.name || 'Não informada';
+      let effectiveWorkNome = works.find(w => String(w.id) === String(selectedWorkId))?.name || 'Não informada';
 
-      if (!selectedWorkId) {
-        if (type === 'saida1' && pointData.entrada1) {
-          effectiveWorkId = pointData.entrada1.obraId;
-          effectiveWorkNome = pointData.entrada1.obraNome;
-        } else if (type === 'entrada2' && pointData.entrada1) {
-          effectiveWorkId = pointData.entrada1.obraId;
-          effectiveWorkNome = pointData.entrada1.obraNome;
-        } else if (type === 'saida2' && pointData.entrada2) {
-          effectiveWorkId = pointData.entrada2.obraId;
-          effectiveWorkNome = pointData.entrada2.obraNome;
-        }
+      // Fallbacks if not provided at register time
+      if (!effectiveWorkId) {
+          if ((type === 'entrada2' || type === 'saida1') && pointData.entrada1) {
+              effectiveWorkId = pointData.entrada1.obraId;
+              effectiveWorkNome = pointData.entrada1.obraNome;
+          } else if (type === 'saida2' && pointData.entrada2) {
+              effectiveWorkId = pointData.entrada2.obraId;
+              effectiveWorkNome = pointData.entrada2.obraNome;
+          }
       }
       
       const segment: PointSegmentRecord = {
@@ -5073,117 +5098,97 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         }
       };
 
-      let dist: number | undefined;
-      let suspeito = 0;
-      let gpsStatus = 'desconhecido';
-
       if (pos && effectiveWorkId) {
-        // Encontra a obra novamente se necessário para pegar as coordenadas
         const workObj = works.find(w => String(w.id) === String(effectiveWorkId));
         if (workObj?.lat && workObj?.lng) {
-          dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, workObj.lat, workObj.lng);
-          gpsStatus = pos.coords.accuracy > 300 ? 'fraco' : 'preciso';
-          // Removido alerta de GPS suspeito conforme solicitado, mantendo apenas para log interno opcional
-          if (workObj.radius && dist > workObj.radius) suspeito = 1;
+          const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, workObj.lat, workObj.lng);
+          segment.gps.dist = dist;
+          segment.gps.status = pos.coords.accuracy > 300 ? 'fraco' : 'preciso';
+          if (workObj.radius && dist > workObj.radius) segment.gps.suspeito = 1;
         }
       }
 
+      // Update segment
       if (type === 'entrada1') {
         pointData.entrada1 = segment;
         pointData.obs_entrada1 = obs.trim();
-        pointData.entrada1_lat = segment.gps.lat;
-        pointData.entrada1_lng = segment.gps.lng;
-        pointData.entrada1_acc = segment.gps.acc;
-        pointData.entrada1_obra = segment.obraNome;
-        if (dist !== undefined) pointData.entrada1_dist = dist;
-        pointData.entrada1_gps_suspeito = 0; // Reset suspeito
-        pointData.entrada1_gps_status = gpsStatus;
+        pointData.work_id = segment.obraId;
+        pointData.work_name = segment.obraNome;
       } else if (type === 'saida1') {
         pointData.saida1 = segment;
         pointData.obs_saida1 = obs.trim();
-        pointData.saida1_lat = segment.gps.lat;
-        pointData.saida1_lng = segment.gps.lng;
-        pointData.saida1_acc = segment.gps.acc;
-        if (dist !== undefined) pointData.saida1_dist = dist;
-        pointData.saida1_gps_suspeito = 0; // Reset suspeito
-        pointData.saida1_gps_status = gpsStatus;
       } else if (type === 'entrada2') {
         pointData.entrada2 = segment;
         pointData.obs_entrada2 = obs.trim();
-        pointData.entrada2_lat = segment.gps.lat;
-        pointData.entrada2_lng = segment.gps.lng;
-        pointData.entrada2_acc = segment.gps.acc;
-        pointData.entrada2_obra = segment.obraNome;
-        if (dist !== undefined) pointData.entrada2_dist = dist;
-        pointData.entrada2_gps_suspeito = 0; // Reset suspeito
-        pointData.entrada2_gps_status = gpsStatus;
       } else if (type === 'saida2') {
         pointData.saida2 = segment;
         pointData.obs_saida2 = obs.trim();
-        pointData.saida2_lat = segment.gps.lat;
-        pointData.saida2_lng = segment.gps.lng;
-        pointData.saida2_acc = segment.gps.acc;
-        if (dist !== undefined) pointData.saida2_dist = dist;
-        pointData.saida2_gps_suspeito = 0; // Reset suspeito
-        pointData.saida2_gps_status = gpsStatus;
+        pointData.encerrado = 1;
       }
       
       pointData.last_timestamp = Date.now();
-      pointData.status = pointData.status || WorkStatus.TRABALHANDO_1;
       
-      if (obs.trim()) {
-        const newObs = { etapa: type, texto: obs.trim(), timestamp: Date.now(), user_name: user.name };
-        if (!pointData.observations) pointData.observations = [];
-        pointData.observations.push(newObs);
+      // Atomic status update based on type and extraData
+      if (type === 'entrada1') pointData.status = WorkStatus.TRABALHANDO_1;
+      else if (type === 'saida1') {
+          pointData.status = (extraData?.choice === 'encerrar') ? WorkStatus.ENCERRADO : WorkStatus.PAUSADO;
+          if (extraData?.choice === 'encerrar') pointData.encerrado = 1;
       }
+      else if (type === 'entrada2') pointData.status = WorkStatus.TRABALHANDO_2;
+      else if (type === 'saida2') pointData.status = WorkStatus.ENCERRADO;
 
-      // 4. Save to Firestore
+      // Update Firebase
       await setDoc(pointRef, sanitizePointData(pointData), { merge: true });
       
+      // Cleanup UI
       setObs('');
-
-      if (type === 'saida1') {
-        setIsPauseModalOpen(true);
-      }
-
       setLastRegisteredTime(horaLocal);
       setShowSuccess(true);
       await loadTodayPoint();
       onRefresh();
+      
     } catch (err) {
       console.error("Erro ao registrar ponto:", err);
-      // Removido alerta técnico genérico para não poluir
+      alert("Erro ao registrar. Tente novamente.");
     } finally {
-      setLoading(false);
       setStatus('idle');
+      setIsRegistering(false);
     }
   };
 
   const handleFinishDay = async () => {
+    if (isRegistering) return;
+    setIsRegistering(true);
     setIsPauseModalOpen(false);
     setLoading(true);
     
-    const allPoints = await storage.getPoints(user.id);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
-    
-    if (index !== -1) {
-      const targetPoint = allPoints[index];
-      encerrar(targetPoint);
-      await storage.savePoint(targetPoint);
-      loadTodayPoint();
-      onRefresh();
+    try {
+        const allPoints = await storage.getPoints(user.id);
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+        const index = allPoints.findIndex(p => (p.funcionario_id === user.id || p.user_id === user.id) && p.date === today);
+        
+        if (index !== -1) {
+        const targetPoint = allPoints[index];
+        encerrar(targetPoint);
+        await storage.savePoint(targetPoint);
+        loadTodayPoint();
+        onRefresh();
+        }
+    } catch (e) {
+        console.error("Error finishing day:", e);
+    } finally {
+        setLoading(false);
+        setIsRegistering(false);
     }
-    setLoading(false);
   };
 
   const currentStatus = calculateWorkStatus(point);
 
   const nextAction = point?.encerrado ? null : 
-    !point?.entrada1 ? 'entrada1' : 
-    !point?.saida1 ? 'saida1' : 
-    (currentStatus === WorkStatus.PAUSADO && !point?.entrada2) ? 'entrada2' : 
-    (!point?.saida2 && point.entrada2) ? 'saida2' : null;
+    getHorarioDisplay(point?.entrada1) === '--:--' ? 'entrada1' : 
+    getHorarioDisplay(point?.saida1) === '--:--' ? 'saida1' : 
+    (currentStatus === WorkStatus.PAUSADO && getHorarioDisplay(point?.entrada2) === '--:--') ? 'entrada2' : 
+    (getHorarioDisplay(point?.saida2) === '--:--' && getHorarioDisplay(point?.entrada2) !== '--:--') ? 'saida2' : null;
   const actionLabels = { entrada1: 'Entrada 1', saida1: 'Saída 1', entrada2: 'Entrada 2', saida2: 'Saída 2' };
 
   return (
@@ -5281,14 +5286,20 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
             </div>
             
             <Button 
-              onClick={() => registerPoint(nextAction as any)} 
+              onClick={() => {
+                if (nextAction === 'saida1') {
+                  setIsPauseModalOpen(true);
+                } else {
+                  registerPoint(nextAction as any);
+                }
+              }}
               className="w-full py-6 text-xl rounded-2xl shadow-2xl"
-              disabled={loading}
+              disabled={isRegistering}
             >
-              {loading ? (
+              {isRegistering ? (
                 <div className="flex flex-col items-center">
                   <span className="text-sm font-bold uppercase tracking-widest mb-1">
-                    Preparando registro...
+                    Registrando...
                   </span>
                 </div>
               ) : (
@@ -5300,10 +5311,10 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       </Card>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <PointMiniCard label="Entrada 1" time={point?.entrada1?.horario} active={!!point?.entrada1?.horario} obra={point?.entrada1?.obraNome || point?.work_name} />
-        <PointMiniCard label="Saída 1" time={point?.saida1?.horario} active={!!point?.saida1?.horario} obra={point?.saida1?.obraNome} />
-        <PointMiniCard label="Entrada 2" time={point?.entrada2?.horario} active={!!point?.entrada2?.horario} obra={point?.entrada2?.obraNome} />
-        <PointMiniCard label="Saída 2" time={point?.saida2?.horario} active={!!point?.saida2?.horario} obra={point?.saida2?.obraNome} />
+        <PointMiniCard label="Entrada 1" time={getHorarioDisplay(point?.entrada1)} active={getHorarioDisplay(point?.entrada1) !== '--:--'} obra={getObraDisplay(point?.entrada1, point?.work_name)} />
+        <PointMiniCard label="Saída 1" time={getHorarioDisplay(point?.saida1)} active={getHorarioDisplay(point?.saida1) !== '--:--'} obra={getObraDisplay(point?.saida1)} />
+        <PointMiniCard label="Entrada 2" time={getHorarioDisplay(point?.entrada2)} active={getHorarioDisplay(point?.entrada2) !== '--:--'} obra={getObraDisplay(point?.entrada2)} />
+        <PointMiniCard label="Saída 2" time={getHorarioDisplay(point?.saida2)} active={getHorarioDisplay(point?.saida2) !== '--:--'} obra={getObraDisplay(point?.saida2)} />
       </div>
 
       {point && (
@@ -5323,23 +5334,16 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         <div className="space-y-6">
           <p className="text-slate-300">Deseja encerrar a jornada ou continuar depois?</p>
           <div className="grid grid-cols-1 gap-3">
-            <Button onClick={async () => {
+             <Button onClick={async () => {
               setIsPauseModalOpen(false);
-              setLoading(true);
-              if (point) {
-                try {
-                  const pointRef = doc(db, 'points', point.id as string);
-                  await updateDoc(pointRef, { status: WorkStatus.PAUSADO });
-                  await loadTodayPoint();
-                } catch (e) {
-                  console.error("Error updating status to PAUSADO:", e);
-                }
-              }
-              setLoading(false);
+              await registerPoint('saida1', null, { choice: 'continuar' });
             }} variant="primary" className="w-full py-4 text-sm font-bold uppercase tracking-widest">
               Continuar Jornada
             </Button>
-            <Button onClick={handleFinishDay} variant="secondary" className="w-full py-4">
+            <Button onClick={async () => {
+              setIsPauseModalOpen(false);
+              await registerPoint('saida1', null, { choice: 'encerrar' });
+            }} variant="secondary" className="w-full py-4">
               Encerrar Jornada
             </Button>
           </div>
