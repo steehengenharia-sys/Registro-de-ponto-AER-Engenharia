@@ -396,11 +396,11 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
     if (eTime === '--:--' || mins <= 0) return null;
     
     // Obra resolution hierarchy: 
-    // 1. Entry Segment (obraId/obraNome)
-    // 2. Exit Segment (obraId/obraNome)
-    // 3. Fallback (from record top-level or legacy fields)
-    let obraId = entrada?.obraId || saida?.obraId || fallbackObraId || p.work_id || '';
-    let obraNome = entrada?.obraNome || saida?.obraNome || fallbackObraName || p.work_name || '-';
+    // 1. Fallback (from record top-level or period fields) - NOW PREFERRED to fix legacy data errors
+    // 2. Entry Segment (obraId/obraNome)
+    // 3. Exit Segment (obraId/obraNome)
+    let obraId = fallbackObraId || entrada?.obraId || saida?.obraId || p.work_id || '';
+    let obraNome = fallbackObraName || entrada?.obraNome || saida?.obraNome || p.work_name || '-';
     
     // Try to normalize obra from list
     if (works) {
@@ -454,7 +454,7 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
   const int1 = createInterval(
     p.entrada1, 
     p.saida1, 
-    p.entrada1_obra, // fallback Id/Name
+    p.entrada1?.obraId || (works?.find(w => w.name === (p.entrada1_obra || p.work_name))?.id),
     p.entrada1_obra || p.work_name
   );
   if (int1) {
@@ -466,8 +466,8 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
   const int2 = createInterval(
     p.entrada2, 
     p.saida2, 
-    p.entrada2_obra || p.entrada1_obra, 
-    p.entrada2_obra || p.entrada1_obra || p.work_name
+    p.entrada2?.obraId || (works?.find(w => w.name === (p.entrada2_obra || p.work_name))?.id),
+    p.entrada2_obra || p.work_name
   );
   if (int2) {
     intervals.push(int2);
@@ -1692,6 +1692,11 @@ export const getHorarioDisplay = (val: any): string => {
 };
 
 export const getObraDisplay = (val: any, legacyFallback?: any): string => {
+  // Prefer the period-level override if provided, as it corrects inconsistently saved legacy segments
+  if (legacyFallback && typeof legacyFallback === 'string' && legacyFallback !== '' && legacyFallback !== 'Não informada') {
+    return legacyFallback;
+  }
+
   if (!val) {
     return (typeof legacyFallback === 'string') ? legacyFallback : 'Não informada';
   }
@@ -1717,8 +1722,8 @@ export const ensurePointSegment = (val: any, obraId?: string, obraNome?: string,
   if (val && typeof val === 'object' && val.horario !== undefined) {
     return {
       horario: getHorarioDisplay(val),
-      obraId: val.obraId || obraId || '',
-      obraNome: val.obraNome || obraNome || 'Não informada',
+      obraId: (obraId !== undefined && obraId !== '') ? obraId : (val.obraId || ''),
+      obraNome: (obraNome !== undefined && obraNome !== '') ? obraNome : (val.obraNome || 'Não informada'),
       observacao: obs !== undefined ? obs : (val.observacao || ''),
       gps: val.gps || { lat: 0, lng: 0, acc: 0, address: '' }
     };
@@ -3750,12 +3755,18 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       const oldSaida2 = editFormData.saida2;
 
       // Re-standardize all segments before saving while preserving GPS
+      // Find obra IDs based on names for Period 1 and Period 2
+      const obraId1 = works.find(w => w.name === editFormData.entrada1_obra)?.id || '';
+      const obraId2 = works.find(w => w.name === editFormData.entrada2_obra)?.id || '';
+
       const finalized: PointRecord = {
         ...editFormData,
-        entrada1: ensurePointSegment(editFormData.entrada1, '', editFormData.entrada1_obra, editFormData.obs_entrada1),
-        saida1: ensurePointSegment(editFormData.saida1, '', '', editFormData.obs_saida1),
-        entrada2: ensurePointSegment(editFormData.entrada2, '', editFormData.entrada2_obra, editFormData.obs_entrada2),
-        saida2: ensurePointSegment(editFormData.saida2, '', '', editFormData.obs_saida2),
+        work_id: obraId1 || editFormData.work_id,
+        work_name: editFormData.entrada1_obra || editFormData.work_name,
+        entrada1: ensurePointSegment(editFormData.entrada1, obraId1, editFormData.entrada1_obra, editFormData.obs_entrada1),
+        saida1: ensurePointSegment(editFormData.saida1, obraId1, editFormData.entrada1_obra, editFormData.obs_saida1),
+        entrada2: ensurePointSegment(editFormData.entrada2, obraId2, editFormData.entrada2_obra, editFormData.obs_entrada2),
+        saida2: ensurePointSegment(editFormData.saida2, obraId2, editFormData.entrada2_obra, editFormData.obs_saida2),
         editado_manual: 1
       };
 
@@ -4071,14 +4082,20 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   <td className="px-6 py-4 text-sm font-medium text-slate-300">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
-                    {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada1, p.work_name)}</p>}
+                    {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada1, p.entrada1_obra || p.work_name)}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</td>
+                  <td className="px-6 py-4">
+                    <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
+                    {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.saida1, p.entrada1_obra || p.work_name)}</p>}
+                  </td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
-                    {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada2, p.work_name)}</p>}
+                    {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada2, p.entrada2_obra || p.work_name)}</p>}
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</td>
+                  <td className="px-6 py-4">
+                    <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
+                    {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.saida2, p.entrada2_obra || p.work_name)}</p>}
+                  </td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
                       {calcularResumoRegistro(p, undefined, works, users).totalHorasFormatadas}
@@ -4154,26 +4171,28 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                 })()}
               </div>
 
-              <div className="grid grid-cols-2 gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 1</p>
-                  <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
-                  {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada1, p.work_name)}</p>}
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 1</p>
-                  <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 2</p>
-                  <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
-                  {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada2, p.work_name)}</p>}
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 2</p>
-                  <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
-                </div>
-              </div>
+                  <div className="grid grid-cols-2 gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 1</p>
+                      <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
+                      {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada1, p.entrada1_obra || p.work_name)}</p>}
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 1</p>
+                      <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
+                      {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.saida1, p.entrada1_obra || p.work_name)}</p>}
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 2</p>
+                      <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
+                      {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada2, p.entrada2_obra || p.work_name)}</p>}
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 2</p>
+                      <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
+                      {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.saida2, p.entrada2_obra || p.work_name)}</p>}
+                    </div>
+                  </div>
 
               <div className="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800 overflow-x-auto gap-4">
                   <div className="space-y-1 min-w-fit">
@@ -4335,13 +4354,64 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         {editFormData && (
           <form onSubmit={saveEditPoint} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Entrada 1" value={getHorarioDisplay(editFormData.entrada1)} onChange={e => setEditFormData({ ...editFormData, entrada1: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 1" value={getHorarioDisplay(editFormData.saida1)} onChange={e => setEditFormData({ ...editFormData, saida1: e.target.value })} placeholder="00:00" />
+              <Input 
+                label="Entrada 1" 
+                value={getHorarioDisplay(editFormData.entrada1)} 
+                onChange={e => {
+                  const val = e.target.value;
+                  setEditFormData({ 
+                    ...editFormData, 
+                    entrada1: typeof editFormData.entrada1 === 'object' 
+                      ? { ...editFormData.entrada1, horario: val } 
+                      : val 
+                  });
+                }} 
+              />
+              <Input 
+                label="Saída 1" 
+                value={getHorarioDisplay(editFormData.saida1)} 
+                onChange={e => {
+                  const val = e.target.value;
+                  setEditFormData({ 
+                    ...editFormData, 
+                    saida1: typeof editFormData.saida1 === 'object' 
+                      ? { ...editFormData.saida1, horario: val } 
+                      : val 
+                  });
+                }} 
+                placeholder="00:00" 
+              />
               <Input label="Obs E1" value={editFormData.obs_entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs Entrada 1" />
               <Input label="Obs S1" value={editFormData.obs_saida1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs Saída 1" />
               
-              <Input label="Entrada 2" value={getHorarioDisplay(editFormData.entrada2)} onChange={e => setEditFormData({ ...editFormData, entrada2: e.target.value })} placeholder="00:00" />
-              <Input label="Saída 2" value={getHorarioDisplay(editFormData.saida2)} onChange={e => setEditFormData({ ...editFormData, saida2: e.target.value })} placeholder="00:00" />
+              <Input 
+                label="Entrada 2" 
+                value={getHorarioDisplay(editFormData.entrada2)} 
+                onChange={e => {
+                  const val = e.target.value;
+                  setEditFormData({ 
+                    ...editFormData, 
+                    entrada2: typeof editFormData.entrada2 === 'object' 
+                      ? { ...editFormData.entrada2, horario: val } 
+                      : val 
+                  });
+                }} 
+                placeholder="00:00" 
+              />
+              <Input 
+                label="Saída 2" 
+                value={getHorarioDisplay(editFormData.saida2)} 
+                onChange={e => {
+                  const val = e.target.value;
+                  setEditFormData({ 
+                    ...editFormData, 
+                    saida2: typeof editFormData.saida2 === 'object' 
+                      ? { ...editFormData.saida2, horario: val } 
+                      : val 
+                  });
+                }} 
+                placeholder="00:00" 
+              />
               <Input label="Obs E2" value={editFormData.obs_entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs Entrada 2" />
               <Input label="Obs S2" value={editFormData.obs_saida2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs Saída 2" />
             </div>
@@ -5096,13 +5166,23 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       if (pointSnap.exists()) {
         const todayPoint = adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() });
         setPoint(todayPoint);
-        if (todayPoint?.entrada1?.obraId) {
-          setSelectedWorkId(String(todayPoint.entrada1.obraId));
+        
+        // Define selectedWorkId based on current phase
+        if (todayPoint?.saida1 && getHorarioDisplay(todayPoint.saida1) !== '--:--') {
+            // Se já saiu da primeira, e ainda não entrou na segunda
+            if (!todayPoint.entrada2 || getHorarioDisplay(todayPoint.entrada2) === '--:--') {
+                setSelectedWorkId(""); // Força nova seleção para Entrada 2
+            } else {
+                setSelectedWorkId(String(todayPoint.entrada2.obraId || ""));
+            }
+        } else if (todayPoint?.entrada1?.obraId) {
+            setSelectedWorkId(String(todayPoint.entrada1.obraId));
         } else if (todayPoint?.work_id) {
-          setSelectedWorkId(String(todayPoint.work_id));
+            setSelectedWorkId(String(todayPoint.work_id));
         }
       } else {
         setPoint(null);
+        setSelectedWorkId("");
       }
     } catch (error) {
       console.error("Error loading today's point:", error);
@@ -5143,7 +5223,7 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           pos = customPos || await new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, { 
                 enableHighAccuracy: true, 
-                timeout: 10000, 
+                timeout: 15000, 
                 maximumAge: 0 
             });
           });
@@ -5182,18 +5262,22 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         } catch (e) { }
       }
 
-      let effectiveWorkId = selectedWorkId;
-      let effectiveWorkNome = works.find(w => String(w.id) === String(selectedWorkId))?.name || 'Não informada';
+      // Determination of work logic based on strict period separation
+      let effectiveWorkId = "";
+      let effectiveWorkNome = "";
 
-      // Fallbacks if not provided at register time
-      if (!effectiveWorkId) {
-          if ((type === 'entrada2' || type === 'saida1') && pointData.entrada1) {
-              effectiveWorkId = pointData.entrada1.obraId;
-              effectiveWorkNome = pointData.entrada1.obraNome;
-          } else if (type === 'saida2' && pointData.entrada2) {
-              effectiveWorkId = pointData.entrada2.obraId;
-              effectiveWorkNome = pointData.entrada2.obraNome;
-          }
+      if (type === 'entrada1') {
+          effectiveWorkId = selectedWorkId;
+          effectiveWorkNome = works.find(w => String(w.id) === String(selectedWorkId))?.name || 'Não informada';
+      } else if (type === 'saida1' && pointData.entrada1) {
+          effectiveWorkId = pointData.entrada1.obraId || "";
+          effectiveWorkNome = pointData.entrada1_obra || pointData.entrada1.obraNome || 'Não informada';
+      } else if (type === 'entrada2') {
+          effectiveWorkId = selectedWorkId;
+          effectiveWorkNome = works.find(w => String(w.id) === String(selectedWorkId))?.name || 'Não informada';
+      } else if (type === 'saida2' && pointData.entrada2) {
+          effectiveWorkId = pointData.entrada2.obraId || "";
+          effectiveWorkNome = pointData.entrada2_obra || pointData.entrada2.obraNome || 'Não informada';
       }
       
       console.log("Comentário a ser salvo:", type, obs.trim());
@@ -5225,18 +5309,25 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       if (type === 'entrada1') {
         pointData.entrada1 = segment;
         pointData.obs_entrada1 = obs.trim();
+        pointData.entrada1_obra = segment.obraNome;
         pointData.work_id = segment.obraId;
         pointData.work_name = segment.obraNome;
       } else if (type === 'saida1') {
         pointData.saida1 = segment;
         pointData.obs_saida1 = obs.trim();
+        // Reset selected work to force a new choice for Period 2
+        setSelectedWorkId("");
       } else if (type === 'entrada2') {
         pointData.entrada2 = segment;
         pointData.obs_entrada2 = obs.trim();
+        pointData.entrada2_obra = segment.obraNome;
+        // DO NOT overwrite global work_name/work_id with period 2 to prevent Period 1 displays from breaking
       } else if (type === 'saida2') {
         pointData.saida2 = segment;
         pointData.obs_saida2 = obs.trim();
         pointData.encerrado = 1;
+        // Reset selection for next day
+        setSelectedWorkId("");
       }
       
       pointData.last_timestamp = Date.now();
@@ -5354,9 +5445,15 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
               {status.label === 'Pausado' && (
                 <span className="text-[10px] font-bold uppercase tracking-widest mt-1 animate-pulse">Aguardando registro</span>
               )}
-              {point?.work_name && (
-                <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {point.work_name}</span>
-              )}
+              {(() => {
+                const isPeriod2 = (nextAction === 'entrada2' || nextAction === 'saida2' || (point?.entrada2 && getHorarioDisplay(point.entrada2) !== '--:--'));
+                const currentWork = isPeriod2 ? point?.entrada2_obra : (point?.entrada1_obra || point?.work_name);
+                
+                if (!currentWork || currentWork === 'Não informada') return null;
+                return (
+                  <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Obra: {currentWork}</span>
+                );
+              })()}
               <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">{status.label === 'Encerrado' ? 'Último registro:' : 'Desde:'} {status.since}</span>
             </div>
           );
