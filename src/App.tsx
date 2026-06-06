@@ -37,7 +37,10 @@ import {
   Search,
   HardHat,
   Wallet,
-  Database
+  Database,
+  ShieldCheck,
+  AlertTriangle,
+  CheckCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -396,11 +399,11 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
     if (eTime === '--:--' || mins <= 0) return null;
     
     // Obra resolution hierarchy: 
-    // 1. Fallback (from record top-level or period fields) - NOW PREFERRED to fix legacy data errors
+    // 1. Fallback (from record top-level or period fields)
     // 2. Entry Segment (obraId/obraNome)
     // 3. Exit Segment (obraId/obraNome)
-    let obraId = fallbackObraId || entrada?.obraId || saida?.obraId || p.work_id || '';
-    let obraNome = fallbackObraName || entrada?.obraNome || saida?.obraNome || p.work_name || '-';
+    let obraId = fallbackObraId || entrada?.obraId || saida?.obraId || '';
+    let obraNome = fallbackObraName || entrada?.obraNome || saida?.obraNome || '';
     
     // Try to normalize obra from list
     if (works) {
@@ -417,7 +420,7 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
       }
     }
     
-    if (!obraNome || obraNome === '-') obraNome = 'Não informada';
+    if (!obraNome || obraNome === '-' || obraNome === 'Não informada') obraNome = 'Não informada';
     
     // Rule: valorHora = baseDiaria / 10.
     // If status is TRABALHANDO and this is the active segment (no saida), value should be 0.
@@ -450,12 +453,18 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
   else if (statusStr === WorkStatus.ENCERRADO) status = "ENCERRADO";
   else if (statusStr === WorkStatus.PAUSADO) status = "PAUSADO";
 
+  const o1Name = p.obra_periodo_1 || getObraPeriodo1(p);
+  const o1Id = works?.find(w => w.name === o1Name)?.id || '';
+
+  const o2Name = p.obra_periodo_2 || getObraPeriodo2(p);
+  const o2Id = works?.find(w => w.name === o2Name)?.id || '';
+
   // Interval 1: Morning/Entry 1
   const int1 = createInterval(
     p.entrada1, 
     p.saida1, 
-    p.entrada1?.obraId || (works?.find(w => w.name === (p.entrada1_obra || p.work_name))?.id),
-    p.entrada1_obra || p.work_name
+    o1Id,
+    o1Name
   );
   if (int1) {
     intervals.push(int1);
@@ -466,8 +475,8 @@ function calcularResumoRegistro(p: PointRecord, valorDiaria?: number, works?: Wo
   const int2 = createInterval(
     p.entrada2, 
     p.saida2, 
-    p.entrada2?.obraId || (works?.find(w => w.name === (p.entrada2_obra || p.work_name))?.id),
-    p.entrada2_obra || p.work_name
+    o2Id,
+    o2Name
   );
   if (int2) {
     intervals.push(int2);
@@ -707,11 +716,11 @@ function generateOfficialReportPDF(
                 const sampleUsers = Array.from(new Set(finalData.map(d => d.userId))).slice(0, 2);
                 const userInfos = sampleUsers.map(uid => {
                     const u = users.find(usr => String(usr.id) === String(uid));
-                    return u ? `${u.name.split(' ')[0]}: R$${u.valor_diaria || 180}` : '';
+                    return u ? `${u.name.split(' ')[0]}: R$ ${u.valor_diaria || 180}` : '';
                 }).filter(Boolean);
-                info = userInfos.length > 0 ? `Ref: ${userInfos.join(', ')}${new Set(finalData.map(d => d.userId)).size > 2 ? '...' : ''}` : 'Individual';
+                info = userInfos.length > 0 ? `Ref.: ${userInfos.join(', ')}${new Set(finalData.map(d => d.userId)).size > 2 ? '...' : ''}` : 'Ref.: Individual';
             }
-            doc.text(info, xOffset + 14, currentY + 14);
+            doc.text(info, xOffset + 14, currentY + 10 + (splitVal.length * 2.8));
         }
 
         if (i < 3) {
@@ -832,11 +841,12 @@ function generateOfficialReportPDF(
     finalData.forEach(p => {
       const canonical = String(p.workName || 'Extra/Outros').trim().toUpperCase();
       if (!workSummaryMap.has(canonical)) {
-        workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, cost: 0 });
+        workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, diarias: 0, cost: 0 });
       }
       const w = workSummaryMap.get(canonical);
       w.workers.add(p.userId);
       w.mins += p.workedMinutes;
+      w.diarias += (p.diarias || 0);
       w.cost += p.valorTotal;
     });
 
@@ -845,15 +855,16 @@ function generateOfficialReportPDF(
     autoTable(doc, {
       startY: currentY,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'FUNC.', 'HORAS', 'CUSTO TOTAL']],
+      head: [['OBRA', 'FUNC.', 'HORAS', 'DIÁRIAS', 'CUSTO TOTAL']],
       body: [
         ...workSummaryRows.map(w => [
           w.name,
           w.workers.size.toString(),
           formatarMinutos(w.mins),
+          w.diarias.toFixed(2).replace('.', ','),
           formatCurrency(w.cost)
         ]),
-        ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, formatCurrency(totalCostToDisplay)]
+        ['TOTAL GERAL', subEmployeesTotal.toString(), subHoursTotal, finalData.reduce((acc, curr) => acc + (curr.diarias || 0), 0).toFixed(2).replace('.', ','), formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8, halign: 'center', cellPadding: 1 },
@@ -863,7 +874,8 @@ function generateOfficialReportPDF(
         0: { halign: 'center', fontStyle: 'bold', cellWidth: 'auto' }, 
         1: { halign: 'center' }, 
         2: { halign: 'center' }, 
-        3: { halign: 'center', fontStyle: 'bold' } 
+        3: { halign: 'center' }, 
+        4: { halign: 'center', fontStyle: 'bold' } 
       },
       didParseCell: (data: any) => {
         if (data.row.index === workSummaryRows.length) {
@@ -1122,25 +1134,26 @@ function generateReciboPDF(
     const workSummaryMap = new Map();
     finalData.forEach(p => {
        const canonical = String(p.workName || 'Extra/Outros').trim().toUpperCase();
-       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
+       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, diarias: 0, cost: 0 });
        const w = workSummaryMap.get(canonical);
        w.mins += p.workedMinutes;
+       w.diarias += (p.diarias || 0);
        w.cost += p.valorTotal;
     });
 
     autoTable(doc, {
       startY: currentY,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'HORAS', 'VALOR']],
+      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'VALOR']],
       body: [
-        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), formatCurrency(w.cost)]),
-        ['TOTAL GERAL', subHoursTotal, formatCurrency(totalCostToDisplay)]
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), w.diarias.toFixed(2).replace('.', ','), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, finalData.reduce((acc, curr) => acc + (curr.diarias || 0), 0).toFixed(2).replace('.', ','), formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: colorBlue, textColor: 255, fontSize: 8.5, halign: 'center', cellPadding: 1.5 },
       bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center', fontStyle: 'bold' } },
+      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center', fontStyle: 'bold' } },
       didParseCell: (data: any) => {
         if (data.row.index === workSummaryMap.size) {
             data.cell.styles.fillColor = colorBlue;
@@ -1407,25 +1420,26 @@ function generateFechamentoPDF(
     const workSummaryMap = new Map();
     finalData.forEach(p => {
        const canonical = String(p.workName || 'EXTRA/OUTROS').trim().toUpperCase();
-       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, cost: 0 });
+       if (!workSummaryMap.has(canonical)) workSummaryMap.set(canonical, { name: p.workName || 'Extra/Outros', mins: 0, diarias: 0, cost: 0 });
        const w = workSummaryMap.get(canonical);
        w.mins += p.workedMinutes;
+       w.diarias += (p.diarias || 0);
        w.cost += p.valorTotal;
     });
 
     autoTable(doc, {
       startY: currentY + 5,
       margin: { left: marginLeft, right: marginLeft },
-      head: [['OBRA', 'HORAS', 'TOTAL']],
+      head: [['OBRA', 'HORAS', 'DIÁRIAS', 'TOTAL']],
       body: [
-        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), formatCurrency(w.cost)]),
-        ['TOTAL GERAL', subHoursTotal, formatCurrency(totalCostToDisplay)]
+        ...Array.from(workSummaryMap.values()).map(w => [w.name, formatarMinutos(w.mins), w.diarias.toFixed(2).replace('.', ','), formatCurrency(w.cost)]),
+        ['TOTAL GERAL', subHoursTotal, finalData.reduce((acc, curr) => acc + (curr.diarias || 0), 0).toFixed(2).replace('.', ','), formatCurrency(totalCostToDisplay)]
       ],
       theme: 'grid',
       headStyles: { fillColor: [51, 65, 85], fontSize: 9, halign: 'center', cellPadding: 1.5 },
       bodyStyles: { fontSize: 8, halign: 'center', valign: 'middle', textColor: [30, 41, 59], cellPadding: 1.5 },
       alternateRowStyles: { fillColor: [252, 252, 254] },
-      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center', fontStyle: 'bold' } },
+      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center', fontStyle: 'bold' } },
       didParseCell: (data) => {
         if (data.row.index === workSummaryMap.size) {
             data.cell.styles.fillColor = colorBlue;
@@ -1677,6 +1691,18 @@ interface PointRecord {
   observations?: { etapa: string; texto: string; timestamp: number }[];
   total_hours: string;
   last_timestamp?: number;
+  obra_periodo_1?: string;
+  obra_periodo_2?: string;
+  corrigido_manual?: boolean;
+  obra_backup?: {
+    entrada1_obra_antigo?: string;
+    entrada2_obra_antigo?: string;
+    work_name_antigo?: string;
+    obra_periodo_1_antigo?: string;
+    obra_periodo_2_antigo?: string;
+    data_correcao?: string;
+    data_migracao?: string;
+  };
 }
 
 // --- Data Adaptation ---
@@ -1738,6 +1764,81 @@ export const ensurePointSegment = (val: any, obraId?: string, obraNome?: string,
   };
 };
 
+export const isObraValida = (obra: any): boolean => {
+  if (!obra) return false;
+  if (typeof obra === 'object') {
+    const name = obra.obraNome || obra.name;
+    return isObraValida(name);
+  }
+  if (typeof obra !== 'string') return false;
+  const clean = obra.trim().toLowerCase();
+  return (
+    clean !== '' && 
+    clean !== '-' && 
+    clean !== 'não informada' && 
+    clean !== 'nao informada' && 
+    clean !== 'não informado' && 
+    clean !== 'nao informado' && 
+    clean !== 'null' && 
+    clean !== 'undefined'
+  );
+};
+
+export const getObraPeriodo1 = (data: any): string => {
+  if (!data) return 'Não informada';
+  
+  // 1. usar obra_periodo_1, se existir e for válida
+  if (isObraValida(data.obra_periodo_1)) {
+    return data.obra_periodo_1.trim();
+  }
+  
+  // 2. se não existir, usar entrada1_obra
+  if (isObraValida(data.entrada1_obra)) {
+    return data.entrada1_obra.trim();
+  }
+  
+  // 3. se não existir, usar entrada1.obraNome (or entrada1 if it is a string)
+  if (data.entrada1 && typeof data.entrada1 === 'object' && isObraValida(data.entrada1.obraNome)) {
+    return data.entrada1.obraNome.trim();
+  }
+  if (isObraValida(data.entrada1)) {
+    return data.entrada1.trim();
+  }
+  
+  // 4. NÃO usar work_name se entrada1_obra existir
+  const hasEntrada1Obra = (data.entrada1_obra !== undefined && data.entrada1_obra !== null && data.entrada1_obra !== '');
+  if (!hasEntrada1Obra && isObraValida(data.work_name)) {
+    return data.work_name.trim();
+  }
+  
+  return 'Não informada';
+};
+
+export const getObraPeriodo2 = (data: any): string => {
+  if (!data) return 'Não informada';
+  
+  // 1. usar obra_periodo_2, se existir e for válida
+  if (isObraValida(data.obra_periodo_2)) {
+    return data.obra_periodo_2.trim();
+  }
+  
+  // 2. se não existir, usar entrada2_obra
+  if (isObraValida(data.entrada2_obra)) {
+    return data.entrada2_obra.trim();
+  }
+  
+  // 3. se não existir, usar entrada2.obraNome (or entrada2 if it is a string)
+  if (data.entrada2 && typeof data.entrada2 === 'object' && isObraValida(data.entrada2.obraNome)) {
+    return data.entrada2.obraNome.trim();
+  }
+  if (isObraValida(data.entrada2)) {
+    return data.entrada2.trim();
+  }
+  
+  // 4. NÃO usar work_name para período 2
+  return 'Não informada';
+};
+
 const adaptLegacyPoint = (data: any): PointRecord => {
   if (!data) return data;
 
@@ -1746,11 +1847,23 @@ const adaptLegacyPoint = (data: any): PointRecord => {
     status: data.status || WorkStatus.NAO_INICIADO,
   };
 
+  newP.obra_periodo_1 = getObraPeriodo1(data);
+  newP.obra_periodo_2 = getObraPeriodo2(data);
+
+  const e1_obraId = (data.entrada1 && typeof data.entrada1 === 'object') ? data.entrada1.obraId : '';
+  const e2_obraId = (data.entrada2 && typeof data.entrada2 === 'object') ? data.entrada2.obraId : '';
+
   // Convert all segments to the official object structure
-  newP.entrada1 = ensurePointSegment(data.entrada1, data.work_id, data.entrada1_obra || data.work_name, data.obs_entrada1);
-  newP.saida1 = ensurePointSegment(data.saida1, '', '', data.obs_saida1);
-  newP.entrada2 = ensurePointSegment(data.entrada2, '', data.entrada2_obra || data.entrada1_obra || data.work_name, data.obs_entrada2);
-  newP.saida2 = ensurePointSegment(data.saida2, '', '', data.obs_saida2);
+  newP.entrada1 = ensurePointSegment(data.entrada1, e1_obraId || data.work_id, newP.obra_periodo_1, data.obs_entrada1);
+  newP.saida1 = ensurePointSegment(data.saida1, e1_obraId || data.work_id, newP.obra_periodo_1, data.obs_saida1);
+  newP.entrada2 = ensurePointSegment(data.entrada2, e2_obraId, newP.obra_periodo_2, data.obs_entrada2);
+  newP.saida2 = ensurePointSegment(data.saida2, e2_obraId, newP.obra_periodo_2, data.obs_saida2);
+
+  // Force outputs to inherit period obras strictly
+  newP.entrada1.obraNome = newP.obra_periodo_1;
+  newP.saida1.obraNome = newP.obra_periodo_1;
+  newP.entrada2.obraNome = newP.obra_periodo_2;
+  newP.saida2.obraNome = newP.obra_periodo_2;
 
   // Sync legacy fields if they exist to the new objects if objects were empty but legacy fields had data
   if (newP.entrada1.horario === '--:--' && data.entrada1 && typeof data.entrada1 === 'string') {
@@ -1817,14 +1930,22 @@ const calculateCostForUser = (totalHoursStr: string, valorDiaria: number) => {
 
 const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
   if (!p) return WorkStatus.NAO_INICIADO;
+  
+  const hasEntrada1 = p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--';
+  const hasSaida1 = p.saida1 && getHorarioDisplay(p.saida1) !== '--:--';
+  const hasEntrada2 = p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--';
+  const hasSaida2 = p.saida2 && getHorarioDisplay(p.saida2) !== '--:--';
+
   if (p.encerrado) return WorkStatus.ENCERRADO;
-  if (p.status) return p.status as WorkStatus;
+  if (hasSaida2) return WorkStatus.ENCERRADO; 
+  if (p.status === WorkStatus.ENCERRADO) return WorkStatus.ENCERRADO;
+
+  if (p.status && p.status !== WorkStatus.ENCERRADO) return p.status as WorkStatus;
 
   // Fallback
-  if (p.saida2 && getHorarioDisplay(p.saida2) !== '--:--') return WorkStatus.ENCERRADO;
-  if (p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--') return WorkStatus.TRABALHANDO;
-  if (p.saida1 && getHorarioDisplay(p.saida1) !== '--:--') return WorkStatus.PAUSADO;
-  if (p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--') return WorkStatus.TRABALHANDO;
+  if (hasEntrada2) return WorkStatus.TRABALHANDO;
+  if (hasSaida1) return WorkStatus.PAUSADO;
+  if (hasEntrada1) return WorkStatus.TRABALHANDO;
   
   return WorkStatus.NAO_INICIADO;
 };
@@ -1921,37 +2042,60 @@ const Input = ({
   </div>
 );
 
-const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, onClose: () => void, title: string, children: React.ReactNode }) => (
-  <AnimatePresence>
-    {isOpen && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-        />
-        <motion.div 
-          initial={{ scale: 0.9, opacity: 0, y: 20 }}
-          animate={{ scale: 1, opacity: 1, y: 0 }}
-          exit={{ scale: 0.9, opacity: 0, y: 20 }}
-          className="relative bg-slate-800 border border-slate-700 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden"
-        >
-          <div className="p-6 border-bottom border-slate-700 flex justify-between items-center">
-            <h3 className="text-xl font-bold text-white">{title}</h3>
-            <button onClick={onClose} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
-              <X size={20} className="text-slate-400" />
-            </button>
-          </div>
-          <div className="p-6 max-h-[80vh] overflow-y-auto">
-            {children}
-          </div>
-        </motion.div>
-      </div>
-    )}
-  </AnimatePresence>
-);
+const Modal = ({ 
+  isOpen, 
+  onClose, 
+  title, 
+  children,
+  size = 'md',
+  zIndexClass = 'z-50'
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  title: string; 
+  children: React.ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  zIndexClass?: string;
+}) => {
+  const sizeClasses = {
+    sm: 'max-w-sm',
+    md: 'max-w-lg',
+    lg: 'max-w-[70vw] h-[80vh] flex flex-col',
+    xl: 'max-w-[95vw] lg:max-w-[90vw] h-[85vh] flex flex-col',
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-2 sm:p-4`}>
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-slate-950/75 backdrop-blur-md"
+          />
+          <motion.div 
+            initial={{ scale: 0.95, opacity: 0, y: 15 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.95, opacity: 0, y: 15 }}
+            className={`relative bg-slate-900 border border-slate-800/80 rounded-3xl w-full shadow-2xl overflow-hidden ${sizeClasses[size]}`}
+          >
+            <div className="p-4 sm:p-6 border-b border-slate-800/60 flex justify-between items-center shrink-0">
+              <h3 className="text-lg sm:text-xl font-bold text-white uppercase tracking-wide">{title}</h3>
+              <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
+                <X size={20} className="text-slate-400" />
+              </button>
+            </div>
+            <div className={`p-4 sm:p-6 overflow-y-auto ${size === 'xl' || size === 'lg' ? 'flex-1' : 'max-h-[80vh]'}`}>
+              {children}
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
 
 // --- Main App ---
 
@@ -2092,6 +2236,283 @@ export default function App() {
       };
     }
   }, [user, refreshData]);
+
+  useEffect(() => {
+    if (points.length === 0 || works.length === 0) return;
+
+    const processThreeManualCorrections = async () => {
+      // 1) FOUR EXPLICIT CARIOCA CORRECTIONS REQUESTED BY USER
+      const cariocaCorrections = [
+        { date: '2026-05-05', p1: 'Araguaia', p2: 'Não informada' },
+        { date: '2026-05-09', p1: 'Araguaia', p2: 'Cerrado' },
+        { date: '2026-04-27', p1: 'Brasil Park', p2: 'Araguaia' },
+        { date: '2026-05-02', p1: 'Brasil Park', p2: 'Araguaia' }
+      ];
+
+      for (const item of cariocaCorrections) {
+        const p = points.find(x => 
+          x.date === item.date && 
+          (x.user_name || '').toLowerCase().includes('carioca')
+        );
+        if (p) {
+          const needsUpdate = 
+            p.obra_periodo_1 !== item.p1 || 
+            p.obra_periodo_2 !== item.p2 ||
+            !p.obra_backup ||
+            p.entrada1?.obraNome !== item.p1 ||
+            p.saida1?.obraNome !== item.p1 ||
+            p.entrada2?.obraNome !== item.p2 ||
+            p.saida2?.obraNome !== item.p2 ||
+            p.entrada1_obra !== item.p1 ||
+            p.entrada2_obra !== item.p2;
+
+          if (needsUpdate) {
+            console.log(`Auto correcting Carioca for ${item.date} to P1:${item.p1}, P2:${item.p2}`);
+            const w1Obj = works.find(w => w.name.trim().toLowerCase() === item.p1.toLowerCase());
+            const w2Obj = works.find(w => w.name.trim().toLowerCase() === item.p2.toLowerCase());
+            const o1Id = w1Obj?.id || "";
+            const o2Id = w2Obj?.id || "";
+
+            const oldBackup = p.obra_backup || {};
+            const updatedPoint: PointRecord = {
+              ...p,
+              obra_periodo_1: item.p1,
+              obra_periodo_2: item.p2,
+              entrada1_obra: item.p1,
+              entrada2_obra: item.p2,
+              work_name: item.p1,
+              work_id: o1Id || p.work_id,
+              entrada1: ensurePointSegment(p.entrada1, o1Id, item.p1, p.obs_entrada1),
+              saida1: ensurePointSegment(p.saida1, o1Id, item.p1, p.obs_saida1),
+              entrada2: ensurePointSegment(p.entrada2, o2Id, item.p2, p.obs_entrada2),
+              saida2: ensurePointSegment(p.saida2, o2Id, item.p2, p.obs_saida2),
+              corrigido_manual: true,
+              editado_manual: 1,
+              obra_backup: {
+                entrada1_obra_antigo: oldBackup.entrada1_obra_antigo || p.entrada1_obra || "",
+                entrada2_obra_antigo: oldBackup.entrada2_obra_antigo || p.entrada2_obra || "",
+                work_name_antigo: oldBackup.work_name_antigo || p.work_name || "",
+                obra_periodo_1_antigo: oldBackup.obra_periodo_1_antigo || p.obra_periodo_1 || "",
+                obra_periodo_2_antigo: oldBackup.obra_periodo_2_antigo || p.obra_periodo_2 || "",
+                data_correcao: oldBackup.data_correcao || new Date().toISOString()
+              }
+            };
+
+            // Force outputs to inherit period obras strictly
+            updatedPoint.entrada1.obraNome = item.p1;
+            updatedPoint.saida1.obraNome = item.p1;
+            updatedPoint.entrada2.obraNome = item.p2;
+            updatedPoint.saida2.obraNome = item.p2;
+
+            const metrics = calculateRecordMetrics(updatedPoint);
+            updatedPoint.total_hours = metrics.workedHours;
+
+            try {
+              await setDoc(doc(db, "points", p.id), sanitizePointData(updatedPoint));
+              console.log(`Carioca point ${item.date} successfully corrected in Firestore.`);
+            } catch (err) {
+              console.error(`Error correcting Carioca point ${item.date}:`, err);
+            }
+          }
+        }
+      }
+
+      // 2) 17/04/2026 - Nivaldo
+      const point2 = points.find(p => 
+        p.date === '2026-04-17' && 
+        (p.user_name || '').toLowerCase().includes('nivaldo') &&
+        !p.corrigido_manual
+      );
+
+      if (point2) {
+        console.log("Applying manual correction for Case 2: 17/04/2026 - Nivaldo");
+        const workAraguaia = works.find(w => w.name.trim().toLowerCase() === "araguaia");
+        const workBrasilPark = works.find(w => w.name.trim().toLowerCase() === "brasil park");
+        
+        const obraIdP1 = workAraguaia?.id || "";
+        const obraIdP2 = workBrasilPark?.id || "";
+
+        const updatedPoint: PointRecord = {
+          ...point2,
+          obra_periodo_1: "Araguaia",
+          obra_periodo_2: "Brasil Park",
+          entrada1_obra: "Araguaia",
+          entrada2_obra: "Brasil Park",
+          work_name: "Araguaia",
+          work_id: obraIdP1 || point2.work_id,
+          entrada1: ensurePointSegment(point2.entrada1, obraIdP1, "Araguaia", point2.obs_entrada1),
+          saida1: ensurePointSegment(point2.saida1, obraIdP1, "Araguaia", point2.obs_saida1),
+          entrada2: ensurePointSegment(point2.entrada2, obraIdP2, "Brasil Park", point2.obs_entrada2),
+          saida2: ensurePointSegment(point2.saida2, obraIdP2, "Brasil Park", point2.obs_saida2),
+          corrigido_manual: true,
+          editado_manual: 1,
+          obra_backup: {
+            entrada1_obra_antigo: point2.entrada1_obra || "",
+            entrada2_obra_antigo: point2.entrada2_obra || "",
+            work_name_antigo: point2.work_name || "",
+            obra_periodo_1_antigo: point2.obra_periodo_1 || "",
+            obra_periodo_2_antigo: point2.obra_periodo_2 || "",
+            data_correcao: new Date().toISOString()
+          }
+        };
+
+        const metrics = calculateRecordMetrics(updatedPoint);
+        updatedPoint.total_hours = metrics.workedHours;
+
+        try {
+          await setDoc(doc(db, "points", updatedPoint.id), sanitizePointData(updatedPoint));
+          console.log("Case 2 corrected.");
+        } catch (err) {
+          console.error("Error correcting Case 2:", err);
+        }
+      }
+
+      // 3) 16/04/2026 - Carioca (Context based)
+      const point3 = points.find(p => 
+        p.date === '2026-04-16' && 
+        (p.user_name || '').toLowerCase().includes('carioca') &&
+        !p.corrigido_manual
+      );
+
+      if (point3) {
+        console.log("Analyzing Case 3: 16/04/2026 - Carioca for historical context and GPS.");
+        
+        const otherCariocaPoints = points.filter(p => 
+          (p.user_name || '').toLowerCase().includes('carioca') && 
+          p.id !== point3.id
+        );
+
+        const workCounts: Record<string, number> = {};
+        otherCariocaPoints.forEach(p => {
+          const w1 = (p.obra_periodo_1 || '').trim().toLowerCase();
+          const w2 = (p.obra_periodo_2 || '').trim().toLowerCase();
+          if (w1 && w1 !== 'không informada') workCounts[w1] = (workCounts[w1] || 0) + 1;
+          if (w2 && w2 !== 'tidak informada' && w2 !== 'não informada') workCounts[w2] = (workCounts[w2] || 0) + 1;
+        });
+
+        const workBrasilPark = works.find(w => w.name.trim().toLowerCase() === "brasil park");
+        const workAraguaia = works.find(w => w.name.trim().toLowerCase() === "araguaia");
+
+        let gpsMatchedObra = "";
+        let gpsConfirmationSecure = false;
+
+        if (point3.entrada1?.gps?.lat && point3.entrada1?.gps?.lng) {
+          const lat = point3.entrada1.gps.lat;
+          const lng = point3.entrada1.gps.lng;
+
+          if (workBrasilPark?.lat && workBrasilPark?.lng) {
+            const distBP = calculateDistance(lat, lng, workBrasilPark.lat, workBrasilPark.lng);
+            if (distBP < 300) {
+              gpsMatchedObra = "Brasil Park";
+              gpsConfirmationSecure = true;
+            }
+          }
+
+          if (workAraguaia?.lat && workAraguaia?.lng && !gpsConfirmationSecure) {
+            const distAR = calculateDistance(lat, lng, workAraguaia.lat, workAraguaia.lng);
+            if (distAR < 300) {
+              gpsMatchedObra = "Araguaia";
+              gpsConfirmationSecure = true;
+            }
+          }
+        }
+
+        let contextMatchedObra = "";
+        let contextConfirmationSecure = false;
+
+        const countBrasilPark = workCounts["brasil park"] || 0;
+        const countAraguaia = workCounts["araguaia"] || 0;
+
+        if (!gpsConfirmationSecure) {
+          if (countBrasilPark > 0 && countAraguaia === 0) {
+            contextMatchedObra = "Brasil Park";
+            contextConfirmationSecure = true;
+          } else if (countAraguaia > 0 && countBrasilPark === 0) {
+            contextMatchedObra = "Araguaia";
+            contextConfirmationSecure = true;
+          }
+        }
+
+        if (gpsConfirmationSecure) {
+          console.log(`GPS confirms Carioca was at: ${gpsMatchedObra}`);
+          const obraIdP1 = gpsMatchedObra === "Brasil Park" ? (workBrasilPark?.id || "") : (workAraguaia?.id || "");
+          const updatedPoint: PointRecord = {
+            ...point3,
+            obra_periodo_1: gpsMatchedObra,
+            obra_periodo_2: "Não informada",
+            entrada1_obra: gpsMatchedObra,
+            entrada2_obra: "Não informada",
+            work_name: gpsMatchedObra,
+            work_id: obraIdP1 || point3.work_id,
+            entrada1: ensurePointSegment(point3.entrada1, obraIdP1, gpsMatchedObra, point3.obs_entrada1),
+            saida1: ensurePointSegment(point3.saida1, obraIdP1, gpsMatchedObra, point3.obs_saida1),
+            entrada2: ensurePointSegment(point3.entrada2, '', "Não informada", point3.obs_entrada2),
+            saida2: ensurePointSegment(point3.saida2, '', "Não informada", point3.obs_saida2),
+            corrigido_manual: true,
+            editado_manual: 1,
+            obra_backup: {
+              entrada1_obra_antigo: point3.entrada1_obra || "",
+              entrada2_obra_antigo: point3.entrada2_obra || "",
+              work_name_antigo: point3.work_name || "",
+              obra_periodo_1_antigo: point3.obra_periodo_1 || "",
+              obra_periodo_2_antigo: point3.obra_periodo_2 || "",
+              data_correcao: new Date().toISOString()
+            }
+          };
+
+          const metrics = calculateRecordMetrics(updatedPoint);
+          updatedPoint.total_hours = metrics.workedHours;
+
+          try {
+            await setDoc(doc(db, "points", updatedPoint.id), sanitizePointData(updatedPoint));
+            console.log(`Case 3 corrected based on GPS to ${gpsMatchedObra}.`);
+          } catch (err) {
+            console.error("Error correcting Case 3:", err);
+          }
+        } else if (contextConfirmationSecure) {
+          console.log(`Context confirms Carioca was at: ${contextMatchedObra}`);
+          const obraIdP1 = contextMatchedObra === "Brasil Park" ? (workBrasilPark?.id || "") : (workAraguaia?.id || "");
+          const updatedPoint: PointRecord = {
+            ...point3,
+            obra_periodo_1: contextMatchedObra,
+            obra_periodo_2: "Não informada",
+            entrada1_obra: contextMatchedObra,
+            entrada2_obra: "Não informada",
+            work_name: contextMatchedObra,
+            work_id: obraIdP1 || point3.work_id,
+            entrada1: ensurePointSegment(point3.entrada1, obraIdP1, contextMatchedObra, point3.obs_entrada1),
+            saida1: ensurePointSegment(point3.saida1, obraIdP1, contextMatchedObra, point3.obs_saida1),
+            entrada2: ensurePointSegment(point3.entrada2, '', "Não informada", point3.obs_entrada2),
+            saida2: ensurePointSegment(point3.saida2, '', "Não informada", point3.obs_saida2),
+            corrigido_manual: true,
+            editado_manual: 1,
+            obra_backup: {
+              entrada1_obra_antigo: point3.entrada1_obra || "",
+              entrada2_obra_antigo: point3.entrada2_obra || "",
+              work_name_antigo: point3.work_name || "",
+              obra_periodo_1_antigo: point3.obra_periodo_1 || "",
+              obra_periodo_2_antigo: point3.obra_periodo_2 || "",
+              data_correcao: new Date().toISOString()
+            }
+          };
+
+          const metrics = calculateRecordMetrics(updatedPoint);
+          updatedPoint.total_hours = metrics.workedHours;
+
+          try {
+            await setDoc(doc(db, "points", updatedPoint.id), sanitizePointData(updatedPoint));
+            console.log(`Case 3 corrected based on context to ${contextMatchedObra}.`);
+          } catch (err) {
+            console.error("Error correcting Case 3:", err);
+          }
+        } else {
+          console.log("Case 3 is kept pending for manual review due to lack of secure confirmation.");
+        }
+      }
+    };
+
+    processThreeManualCorrections();
+  }, [points, works]);
 
   useEffect(() => {
     localStorage.setItem('ar_current_view', view);
@@ -2481,11 +2902,68 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
       });
 
       // Update totalCost
-      totalCost = Array.from(workMap.values()).reduce((acc, curr) => acc + curr.cost, 0);
+      totalCost = Array.from(workMap.values()).reduce((acc, curr: any) => acc + curr.cost, 0);
 
-      const activeWorks = Array.from(workMap.values())
-        .map(w => ({ name: w.name, employees: w.employees.size, hours: formatarMinutos(w.minutes), cost: w.cost }))
-        .sort((a, b) => b.cost - a.cost);
+      // Unique works of today from records with status TRABALHANDO or PAUSADO
+      const activeWorkNamesFromPoints = new Set<string>();
+      todayPoints.forEach((p: any) => {
+        const ws = calculateWorkStatus(p);
+        if (ws === WorkStatus.TRABALHANDO || ws === WorkStatus.TRABALHANDO_1 || ws === WorkStatus.TRABALHANDO_2 || ws === WorkStatus.PAUSADO) {
+          let activeWorkName: string | undefined = undefined;
+          
+          const hasE2 = p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--';
+          const hasS2 = p.saida2 && getHorarioDisplay(p.saida2) !== '--:--';
+          const hasE1 = p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--';
+          const hasS1 = p.saida1 && getHorarioDisplay(p.saida1) !== '--:--';
+
+          if (hasE2 && !hasS2) {
+            activeWorkName = p.obra_periodo_2 || p.entrada2_obra || p.work_name;
+          } else if (hasE1 && !hasS1) {
+            activeWorkName = p.obra_periodo_1 || p.entrada1_obra || p.work_name;
+          } else {
+            activeWorkName = p.obra_periodo_1 || p.entrada1_obra || p.work_name;
+          }
+
+          if (activeWorkName && activeWorkName !== 'Não informada' && activeWorkName.trim() !== '') {
+            activeWorkNamesFromPoints.add(activeWorkName);
+          }
+        }
+      });
+
+      const activeWorks = Array.from(activeWorkNamesFromPoints).map(wName => {
+        const wMapEntry = workMap.get(wName);
+        const minutes = wMapEntry ? wMapEntry.minutes : 0;
+        const cost = wMapEntry ? wMapEntry.cost : 0;
+
+        // Determine employee count for this active work precisely among active ones
+        const empCount = todayPoints.filter((p: any) => {
+          const ws = calculateWorkStatus(p);
+          if (ws === WorkStatus.TRABALHANDO || ws === WorkStatus.TRABALHANDO_1 || ws === WorkStatus.TRABALHANDO_2 || ws === WorkStatus.PAUSADO) {
+            let activeWorkName: string | undefined = undefined;
+            const hasE2 = p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--';
+            const hasS2 = p.saida2 && getHorarioDisplay(p.saida2) !== '--:--';
+            const hasE1 = p.entrada1 && getHorarioDisplay(p.entrada1) !== '--:--';
+            const hasS1 = p.saida1 && getHorarioDisplay(p.saida1) !== '--:--';
+
+            if (hasE2 && !hasS2) {
+              activeWorkName = p.obra_periodo_2 || p.entrada2_obra || p.work_name;
+            } else if (hasE1 && !hasS1) {
+              activeWorkName = p.obra_periodo_1 || p.entrada1_obra || p.work_name;
+            } else {
+              activeWorkName = p.obra_periodo_1 || p.entrada1_obra || p.work_name;
+            }
+            return activeWorkName === wName;
+          }
+          return false;
+        }).length;
+
+        return {
+          name: wName,
+          employees: empCount,
+          hours: formatarMinutos(minutes),
+          cost: cost
+        };
+      }).sort((a, b) => b.cost - a.cost);
 
       // New logic for Presence and Alerts - Consider valid users only
       const totalRegistered = validUsers.length;
@@ -2668,7 +3146,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-2 text-slate-400">
                           <Building2 size={12} className="text-slate-600" />
                           <span className="text-xs font-medium">
-                            {getObraDisplay(p.entrada2) !== 'Não informada' ? getObraDisplay(p.entrada2) : getObraDisplay(p.entrada1, p.work_name || '---')}
+                            {(() => {
+                              const o1 = p.obra_periodo_1 || 'Não informada';
+                              const o2 = p.obra_periodo_2 || 'Não informada';
+                              if (o2 !== 'Não informada' && o1 !== o2) return `${o1} / ${o2}`;
+                              return o1;
+                            })()}
                           </span>
                         </div>
                       </td>
@@ -2720,7 +3203,12 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
                         <div className="flex items-center gap-1.5 text-slate-400 mt-0.5">
                           <Building2 size={12} className="text-slate-500" />
                           <span className="text-xs font-medium truncate max-w-[150px]">
-                            {getObraDisplay(p.entrada2) !== 'Não informada' ? getObraDisplay(p.entrada2) : getObraDisplay(p.entrada1, p.work_name || '---')}
+                            {(() => {
+                              const o1 = p.obra_periodo_1 || 'Não informada';
+                              const o2 = p.obra_periodo_2 || 'Não informada';
+                              if (o2 !== 'Não informada' && o1 !== o2) return `${o1} / ${o2}`;
+                              return o1;
+                            })()}
                           </span>
                         </div>
                       </div>
@@ -3226,10 +3714,10 @@ function HistoryView({ user, points }: { user: UserData, points: PointRecord[] }
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PointHistoryItem label="Entrada 1" time={getHorarioDisplay(p.entrada1)} obra={getObraDisplay(p.entrada1, p.work_name)} />
-              <PointHistoryItem label="Saída 1" time={getHorarioDisplay(p.saida1)} obra={getObraDisplay(p.saida1)} />
-              <PointHistoryItem label="Entrada 2" time={getHorarioDisplay(p.entrada2)} obra={getObraDisplay(p.entrada2, getObraDisplay(p.entrada1, p.work_name))} />
-              <PointHistoryItem label="Saída 2" time={getHorarioDisplay(p.saida2)} obra={getObraDisplay(p.saida2)} />
+              <PointHistoryItem label="Entrada 1" time={getHorarioDisplay(p.entrada1)} obra={getObraDisplay(p.entrada1, p.entrada1_obra || p.work_name)} />
+              <PointHistoryItem label="Saída 1" time={getHorarioDisplay(p.saida1)} obra={getObraDisplay(p.saida1, p.entrada1_obra || p.work_name)} />
+              <PointHistoryItem label="Entrada 2" time={getHorarioDisplay(p.entrada2)} obra={getObraDisplay(p.entrada2, p.entrada2_obra)} />
+              <PointHistoryItem label="Saída 2" time={getHorarioDisplay(p.saida2)} obra={getObraDisplay(p.saida2, p.entrada2_obra)} />
             </div>
           </Card>
         ))}
@@ -3267,7 +3755,25 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [isAuditEditModalOpen, setIsAuditEditModalOpen] = useState(false);
+  const [auditEditRecord, setAuditEditRecord] = useState<AuditRecord | null>(null);
+  const [auditEditWorkP1, setAuditEditWorkP1] = useState('');
+  const [auditEditWorkP2, setAuditEditWorkP2] = useState('');
+  const [auditFilter, setAuditFilter] = useState<'todos' | 'seguro' | 'revisar' | 'corrigido'>('todos');
+  const [auditSearchQuery, setAuditSearchQuery] = useState('');
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditPageSize, setAuditPageSize] = useState<number>(12);
+  const [selectedDetailRecord, setSelectedDetailRecord] = useState<any | null>(null);
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [editFormData, setEditFormData] = useState<any>(null);
+
+  const [pointsPage, setPointsPage] = useState(1);
+  const pointsPerPage = 10;
+
+  useEffect(() => {
+    setPointsPage(1);
+  }, [filters.userId, filters.workId, filters.startDate, filters.endDate, points]);
   const [manualFormData, setManualFormData] = useState<any>({ 
     user_id: '', 
     date: '', 
@@ -3287,6 +3793,187 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [importFilters, setImportFilters] = useState({ startDate: '', endDate: '' });
+
+  interface AuditRecord {
+    id: string;
+    date: string;
+    employee: string;
+    entrada1_obra: string;
+    entrada2_obra: string;
+    work_name: string;
+    obra_periodo_1_atual: string;
+    obra_periodo_2_atual: string;
+    sugestao_p1: string;
+    sugestao_p2: string;
+    status: 'seguro' | 'revisar' | 'corrigido';
+    reason: string;
+    p: PointRecord;
+  }
+
+  const [isMigrating, setIsMigrating] = useState(false);
+
+  const runAudit = (): AuditRecord[] => {
+    return points.map(p => {
+      const rawEnt1 = (p.entrada1_obra || '').trim();
+      const rawEnt2 = (p.entrada2_obra || '').trim();
+      const rawWn = (p.work_name || '').trim();
+      
+      const hasP2 = (p.entrada2 && getHorarioDisplay(p.entrada2) !== '--:--') || 
+                    (p.saida2 && getHorarioDisplay(p.saida2) !== '--:--');
+
+      let sug1 = rawEnt1 || rawWn || '';
+      let sug2 = rawEnt2 || '';
+
+      let status: 'seguro' | 'revisar' | 'corrigido' = 'seguro';
+      let reason = '';
+
+      const hasConflict1 = !!rawEnt1 && !!rawWn && rawEnt1.toLowerCase() !== rawWn.toLowerCase();
+      
+      if (p.corrigido_manual) {
+        status = 'corrigido';
+        reason = 'Corrigido Manualmente';
+      } else if (hasConflict1) {
+        status = 'revisar';
+        reason = `Conflito Período 1 ("${rawEnt1}" vs "${rawWn}")`;
+      } else if (!rawEnt2 && hasP2) {
+        status = 'revisar';
+        reason = 'Possui Período 2 mas "Obra Período 2" está vazia';
+      } else {
+        const currentP1 = (p.obra_periodo_1 || '').trim();
+        const currentP2 = (p.obra_periodo_2 || '').trim();
+
+        const normalizedSug1 = (sug1 || 'Não informada').trim();
+        const normalizedSug2 = (sug2 || 'Não informada').trim();
+
+        const alreadyCorrect = (currentP1 === normalizedSug1) && (currentP2 === normalizedSug2);
+        
+        if (alreadyCorrect && p.obra_backup) {
+          status = 'corrigido';
+          reason = 'Já migrado e seguro';
+        }
+      }
+
+      return {
+        id: p.id,
+        date: p.date,
+        employee: p.user_name || '---',
+        entrada1_obra: rawEnt1,
+        entrada2_obra: rawEnt2,
+        work_name: rawWn,
+        obra_periodo_1_atual: p.obra_periodo_1 || '',
+        obra_periodo_2_atual: p.obra_periodo_2 || '',
+        sugestao_p1: sug1 || 'Não informada',
+        sugestao_p2: sug2 || 'Não informada',
+        status,
+        reason: reason || 'Pronto para migrar',
+        p
+      };
+    });
+  };
+
+  const saveAuditManualEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!auditEditRecord) return;
+    setIsSubmitting(true);
+    try {
+      const cleanP1 = (auditEditWorkP1 || '').trim();
+      const cleanP2 = (auditEditWorkP2 || '').trim();
+
+      const obraId1 = works.find(w => w.name.trim().toLowerCase() === cleanP1.toLowerCase())?.id || '';
+      const obraId2 = works.find(w => w.name.trim().toLowerCase() === cleanP2.toLowerCase())?.id || '';
+
+      const p = auditEditRecord.p;
+
+      const updatedPoint: PointRecord = {
+        ...p,
+        obra_periodo_1: cleanP1,
+        obra_periodo_2: cleanP2,
+        entrada1_obra: cleanP1,
+        entrada2_obra: cleanP2,
+        work_name: cleanP1,
+        work_id: obraId1 || p.work_id,
+        entrada1: ensurePointSegment(p.entrada1, obraId1, cleanP1, p.obs_entrada1),
+        saida1: ensurePointSegment(p.saida1, obraId1, cleanP1, p.obs_saida1),
+        entrada2: ensurePointSegment(p.entrada2, obraId2, cleanP2, p.obs_entrada2),
+        saida2: ensurePointSegment(p.saida2, obraId2, cleanP2, p.obs_saida2),
+        corrigido_manual: true,
+        editado_manual: 1,
+        obra_backup: {
+          entrada1_obra_antigo: p.entrada1_obra || "",
+          entrada2_obra_antigo: p.entrada2_obra || "",
+          work_name_antigo: p.work_name || "",
+          obra_periodo_1_antigo: p.obra_periodo_1 || "",
+          obra_periodo_2_antigo: p.obra_periodo_2 || "",
+          data_correcao: new Date().toISOString()
+        }
+      };
+
+      const metrics = calculateRecordMetrics(updatedPoint);
+      updatedPoint.total_hours = metrics.workedHours;
+
+      await setDoc(doc(db, "points", updatedPoint.id), sanitizePointData(updatedPoint));
+      
+      setIsAuditEditModalOpen(false);
+      alert("Registro ajustado manualmente com sucesso.");
+      onRefresh();
+    } catch (error) {
+      console.error("Erro ao salvar ajuste manual:", error);
+      alert("Erro ao salvar ajuste manual.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const aplicarCorrecaoSegura = async (auditRecords: AuditRecord[]) => {
+    const safeRecords = auditRecords.filter(r => r.status === 'seguro');
+    const revisarCount = auditRecords.filter(r => r.status === 'revisar').length;
+    if (safeRecords.length === 0) {
+      alert("Nenhum registro seguro para corrigir!");
+      return;
+    }
+
+    if (!window.confirm(`Essa ação irá aplicar correção automática em ${safeRecords.length} registros seguros. Os ${revisarCount} registros de revisão manual não serão alterados. Deseja continuar?`)) {
+      return;
+    }
+
+    setIsMigrating(true);
+    try {
+      const chunkSize = 400;
+      for (let i = 0; i < safeRecords.length; i += chunkSize) {
+        const chunk = safeRecords.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+
+        chunk.forEach(record => {
+          const docRef = doc(db, "points", record.id);
+          const sug_p1 = record.sugestao_p1;
+          const sug_p2 = record.sugestao_p2;
+
+          const updateData: any = {
+            obra_periodo_1: sug_p1,
+            obra_periodo_2: sug_p2,
+            obra_backup: {
+              entrada1_obra_antigo: record.entrada1_obra,
+              entrada2_obra_antigo: record.entrada2_obra,
+              work_name_antigo: record.work_name,
+              data_migracao: new Date().toISOString()
+            }
+          };
+
+          batch.update(docRef, updateData);
+        });
+
+        await batch.commit();
+      }
+
+      alert(`Correção segura aplicada com sucesso em ${safeRecords.length} registros!`);
+      await onRefresh();
+    } catch (err) {
+      console.error("Erro ao aplicar correção segura:", err);
+      alert("Erro ao aplicar correção segura nas obras.");
+    } finally {
+      setIsMigrating(false);
+    }
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem("lastBackup");
@@ -3518,6 +4205,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         saida2: ensurePointSegment(manualFormData.saida2, '', manualFormData.entrada2_obra),
         entrada1_obra: manualFormData.entrada1_obra,
         entrada2_obra: manualFormData.entrada2_obra,
+        obra_periodo_1: manualFormData.entrada1_obra || 'Não informada',
+        obra_periodo_2: manualFormData.entrada2_obra || 'Não informada',
         obs: manualFormData.obs,
         editado_manual: 1,
         total_hours: '00:00',
@@ -3581,6 +4270,12 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     if (filters.endDate && p.date > filters.endDate) return false;
     return true;
   });
+
+  const totalPointsPages = Math.ceil(filteredPoints.length / pointsPerPage) || 1;
+  const paginatedPoints = filteredPoints.slice(
+    (pointsPage - 1) * pointsPerPage,
+    pointsPage * pointsPerPage
+  );
 
   const confirmDelete = (id: string | number) => {
     setPointToDelete(id);
@@ -3658,6 +4353,8 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
       obra2: data.entrada2_obra
     });
 
+    data.status = data.status || calculateWorkStatus(data);
+
     setEditFormData(data);
     setIsEditModalOpen(true);
   };
@@ -3726,6 +4423,85 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     }
   };
 
+  const handleCloseShiftManually = async () => {
+    if (!editFormData || isSubmitting) return;
+
+    const hasS1 = editFormData.saida1 && getHorarioDisplay(editFormData.saida1) !== '--:--';
+    const hasE2 = editFormData.entrada2 && getHorarioDisplay(editFormData.entrada2) !== '--:--';
+    const hasS2 = editFormData.saida2 && getHorarioDisplay(editFormData.saida2) !== '--:--';
+
+    let pendingExit: 'saida1' | 'saida2' | 'none' = 'none';
+    if (!hasS1 && !hasE2) pendingExit = 'saida1';
+    else if (hasE2 && !hasS2) pendingExit = 'saida2';
+
+    let finalTime = '';
+    
+    if (pendingExit !== 'none') {
+      const now = new Date();
+      const currentHHMM = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }).slice(0, 5);
+
+      const timeStr = window.prompt(`Digite o horário de encerramento para ${pendingExit === 'saida1' ? 'Saída 1' : 'Saída 2'} (HH:MM):`, currentHHMM);
+      if (timeStr === null) return; // User cancelled
+      
+      // Quick validation of HH:MM format
+      if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(timeStr.trim())) {
+        alert("Formato de horário inválido. Use HH:MM.");
+        return;
+      }
+      finalTime = timeStr.trim();
+    } else {
+      if (!window.confirm("Não há saídas pendentes, mas o registro não está encerrado. Deseja encerrá-lo agora com os horários atuais?")) {
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    try {
+      const userObj = users.find(u => String(u.id) === String(editFormData.user_id));
+      
+      const obraId1 = works.find(w => w.name === editFormData.entrada1_obra)?.id || '';
+      const obraId2 = works.find(w => w.name === editFormData.entrada2_obra)?.id || '';
+
+      const updatedSaida1 = pendingExit === 'saida1' 
+        ? ensurePointSegment(finalTime, obraId1, editFormData.entrada1_obra, editFormData.obs_saida1)
+        : ensurePointSegment(editFormData.saida1, obraId1, editFormData.entrada1_obra, editFormData.obs_saida1);
+
+      const updatedSaida2 = pendingExit === 'saida2' 
+        ? ensurePointSegment(finalTime, obraId2, editFormData.entrada2_obra, editFormData.obs_saida2)
+        : ensurePointSegment(editFormData.saida2, obraId2, editFormData.entrada2_obra, editFormData.obs_saida2);
+
+      const finalized: PointRecord = {
+        ...editFormData,
+        work_id: obraId1 || editFormData.work_id,
+        work_name: editFormData.entrada1_obra || editFormData.work_name,
+        entrada1: ensurePointSegment(editFormData.entrada1, obraId1, editFormData.entrada1_obra, editFormData.obs_entrada1),
+        saida1: updatedSaida1,
+        entrada2: ensurePointSegment(editFormData.entrada2, obraId2, editFormData.entrada2_obra, editFormData.obs_entrada2),
+        saida2: updatedSaida2,
+        obra_periodo_1: editFormData.entrada1_obra || 'Não informada',
+        obra_periodo_2: editFormData.entrada2_obra || 'Não informada',
+        status: WorkStatus.ENCERRADO,
+        encerrado: true,
+        editado_manual: 1
+      };
+
+      const metrics = calculateRecordMetrics(finalized, userObj?.valor_diaria || 0);
+      finalized.total_hours = metrics.workedHours;
+
+      console.log("Encerrando jornada manualmente via ADM:", finalized);
+      await setDoc(doc(db, "points", finalized.id), sanitizePointData(finalized));
+
+      setIsEditModalOpen(false);
+      onRefresh();
+      alert("Jornada de ponto encerrada com sucesso!");
+    } catch (error) {
+      console.error("Erro ao encerrar jornada manualmente:", error);
+      alert("Erro ao encerrar jornada.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const saveEditPoint = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -3767,6 +4543,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         saida1: ensurePointSegment(editFormData.saida1, obraId1, editFormData.entrada1_obra, editFormData.obs_saida1),
         entrada2: ensurePointSegment(editFormData.entrada2, obraId2, editFormData.entrada2_obra, editFormData.obs_entrada2),
         saida2: ensurePointSegment(editFormData.saida2, obraId2, editFormData.entrada2_obra, editFormData.obs_saida2),
+        obra_periodo_1: editFormData.entrada1_obra || 'Não informada',
+        obra_periodo_2: editFormData.entrada2_obra || 'Não informada',
+        status: editFormData.status,
+        encerrado: editFormData.status === WorkStatus.ENCERRADO,
         editado_manual: 1
       };
 
@@ -3820,7 +4600,13 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     const intervals = extractIntervalsFromPoints(filteredPoints, users, works, undefined, diariaValue, 'auto', filters.workId);
     const total = intervals.reduce((acc, curr) => acc + curr.valorTotal, 0);
     const diaria = parseFloat(diariaValue) || 180;
-    generateOfficialReportPDF(intervals, total, filters, users, works, 'auto', diaria);
+    
+    const isSingleUser = filters.userId ? true : false;
+    if (isSingleUser) {
+      generateReciboPDF(intervals, total, filters, users, works, 'auto', diaria);
+    } else {
+      generateOfficialReportPDF(intervals, total, filters, users, works, 'auto', diaria);
+    }
   };
 
   const generateExcel = () => {
@@ -3872,6 +4658,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
           <Button onClick={() => setIsBackupModalOpen(true)} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
             <Database size={18} className="text-purple-500" /> Backup/Restaurar
+          </Button>
+
+          <Button onClick={() => setIsAuditModalOpen(true)} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile flex items-center gap-2">
+            <ShieldCheck size={18} className="text-emerald-500" /> Auditar Obras
           </Button>
 
           <Button onClick={() => { exportarBackup(points); updateLastBackup(); }} variant="secondary" className="bg-slate-800 hover:bg-slate-700 w-full-mobile">
@@ -4049,7 +4839,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {filteredPoints.map(p => (
+              {paginatedPoints.map(p => (
                 <tr key={p.id} className={`hover:bg-slate-800/30 transition-colors group ${selecionados.includes(p.id) ? 'bg-orange-500/5' : ''}`}>
                   <td className="px-6 py-4">
                     <input 
@@ -4082,19 +4872,19 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                   <td className="px-6 py-4 text-sm font-medium text-slate-300">{new Date(p.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
-                    {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada1, p.entrada1_obra || p.work_name)}</p>}
+                    {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.obra_periodo_1 || 'Não informada'}</p>}
                   </td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
-                    {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.saida1, p.entrada1_obra || p.work_name)}</p>}
+                    {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.obra_periodo_1 || 'Não informada'}</p>}
                   </td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
-                    {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.entrada2, p.entrada2_obra || p.work_name)}</p>}
+                    {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.obra_periodo_2 || 'Não informada'}</p>}
                   </td>
                   <td className="px-6 py-4">
                     <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
-                    {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{getObraDisplay(p.saida2, p.entrada2_obra || p.work_name)}</p>}
+                    {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate max-w-[100px]">{p.obra_periodo_2 || 'Não informada'}</p>}
                   </td>
                   <td className="px-6 py-4">
                     <span className="px-2.5 py-1 bg-slate-800 rounded-lg text-xs font-black text-white border border-slate-700">
@@ -4141,7 +4931,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
 
         {/* Mobile Cards */}
         <div className="md:hidden flex flex-col divide-y divide-slate-800">
-          {filteredPoints.map(p => (
+          {paginatedPoints.map(p => (
             <div key={p.id} className={`p-4 space-y-4 transition-colors ${selecionados.includes(p.id) ? 'bg-orange-500/5' : ''}`}>
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-3">
@@ -4175,22 +4965,22 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 1</p>
                       <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada1)}</p>
-                      {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada1, p.entrada1_obra || p.work_name)}</p>}
+                      {getHorarioDisplay(p.entrada1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.obra_periodo_1 || 'Não informada'}</p>}
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 1</p>
                       <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida1)}</p>
-                      {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.saida1, p.entrada1_obra || p.work_name)}</p>}
+                      {getHorarioDisplay(p.saida1) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.obra_periodo_1 || 'Não informada'}</p>}
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Entrada 2</p>
                       <p className="text-sm font-bold text-emerald-500">{getHorarioDisplay(p.entrada2)}</p>
-                      {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.entrada2, p.entrada2_obra || p.work_name)}</p>}
+                      {getHorarioDisplay(p.entrada2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.obra_periodo_2 || 'Não informada'}</p>}
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Saída 2</p>
                       <p className="text-sm font-bold text-orange-500">{getHorarioDisplay(p.saida2)}</p>
-                      {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{getObraDisplay(p.saida2, p.entrada2_obra || p.work_name)}</p>}
+                      {getHorarioDisplay(p.saida2) !== '--:--' && <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.obra_periodo_2 || 'Não informada'}</p>}
                     </div>
                   </div>
 
@@ -4230,7 +5020,50 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </div>
             ))}
           </div>
-        </div>
+
+        {/* Controls pagination */}
+        {totalPointsPages > 1 && (
+          <div className="p-6 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-4 bg-slate-900/10">
+            <div className="text-xs text-slate-400 font-medium font-sans">
+              Mostrando <span className="font-bold text-white">{(pointsPage - 1) * pointsPerPage + 1}</span> a <span className="font-bold text-white">{Math.min(pointsPage * pointsPerPage, filteredPoints.length)}</span> de <span className="font-bold text-white">{filteredPoints.length}</span> registros
+            </div>
+            <div className="flex items-center gap-2 overflow-x-auto max-w-full py-1">
+              <Button 
+                variant="secondary" 
+                onClick={() => setPointsPage(prev => Math.max(prev - 1, 1))} 
+                disabled={pointsPage === 1}
+                className="px-3 py-1.5 text-xs disabled:opacity-40"
+              >
+                Anterior
+              </Button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPointsPages }, (_, i) => i + 1).map(num => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setPointsPage(num)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold font-sans transition-all ${
+                      pointsPage === num 
+                        ? 'bg-orange-600 text-white' 
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/50'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+              <Button 
+                variant="secondary" 
+                onClick={() => setPointsPage(prev => Math.min(prev + 1, totalPointsPages))} 
+                disabled={pointsPage === totalPointsPages}
+                className="px-3 py-1.5 text-xs disabled:opacity-40"
+              >
+                Próxima
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <Modal isOpen={isBulkDeleteModalOpen} onClose={() => setIsBulkDeleteModalOpen(false)} title="Confirmar Exclusão em Massa">
         <div className="space-y-6">
@@ -4350,123 +5183,330 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
         )}
       </Modal>
 
-      <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="Editar Registro de Ponto">
-        {editFormData && (
-          <form onSubmit={saveEditPoint} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <Input 
-                label="Entrada 1" 
-                value={getHorarioDisplay(editFormData.entrada1)} 
-                onChange={e => {
-                  const val = e.target.value;
-                  setEditFormData({ 
-                    ...editFormData, 
-                    entrada1: typeof editFormData.entrada1 === 'object' 
-                      ? { ...editFormData.entrada1, horario: val } 
-                      : val 
-                  });
-                }} 
-              />
-              <Input 
-                label="Saída 1" 
-                value={getHorarioDisplay(editFormData.saida1)} 
-                onChange={e => {
-                  const val = e.target.value;
-                  setEditFormData({ 
-                    ...editFormData, 
-                    saida1: typeof editFormData.saida1 === 'object' 
-                      ? { ...editFormData.saida1, horario: val } 
-                      : val 
-                  });
-                }} 
-                placeholder="00:00" 
-              />
-              <Input label="Obs E1" value={editFormData.obs_entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs Entrada 1" />
-              <Input label="Obs S1" value={editFormData.obs_saida1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs Saída 1" />
-              
-              <Input 
-                label="Entrada 2" 
-                value={getHorarioDisplay(editFormData.entrada2)} 
-                onChange={e => {
-                  const val = e.target.value;
-                  setEditFormData({ 
-                    ...editFormData, 
-                    entrada2: typeof editFormData.entrada2 === 'object' 
-                      ? { ...editFormData.entrada2, horario: val } 
-                      : val 
-                  });
-                }} 
-                placeholder="00:00" 
-              />
-              <Input 
-                label="Saída 2" 
-                value={getHorarioDisplay(editFormData.saida2)} 
-                onChange={e => {
-                  const val = e.target.value;
-                  setEditFormData({ 
-                    ...editFormData, 
-                    saida2: typeof editFormData.saida2 === 'object' 
-                      ? { ...editFormData.saida2, horario: val } 
-                      : val 
-                  });
-                }} 
-                placeholder="00:00" 
-              />
-              <Input label="Obs E2" value={editFormData.obs_entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs Entrada 2" />
-              <Input label="Obs S2" value={editFormData.obs_saida2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs Saída 2" />
-            </div>
+      {/* MODAL DE AJUSTE MANUAL DE AUDITORIA */}
+      <Modal 
+        isOpen={isAuditEditModalOpen} 
+        onClose={() => setIsAuditEditModalOpen(false)} 
+        title="Ajuste Manual do Registro de Auditoria"
+        size="md"
+        zIndexClass="z-[80]"
+      >
+        {auditEditRecord && (
+          <form onSubmit={saveAuditManualEdit} className="space-y-4">
             
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700 flex flex-col gap-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Trabalhadas:</span>
-                  <span className="text-lg font-black text-white">
-                    {editFormData.total_hours}
+            {/* INFORMAÇÕES DO REGISTRO */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-700/30 space-y-3">
+              <div className="flex justify-between items-center text-xs border-b border-slate-700/30 pb-2">
+                <div>
+                  <span className="text-slate-500 font-bold block uppercase tracking-wider text-[10px]">Data do Registro</span>
+                  <span className="text-white font-extrabold text-sm">
+                    {new Date(auditEditRecord.date + 'T00:00:00').toLocaleDateString('pt-BR')}
                   </span>
                 </div>
-                <div className="flex justify-between items-center border-t border-slate-700 pt-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cálculo (+1h):</span>
-                  <span className="text-lg font-black text-orange-500">
-                    {editFormData.calculation_hours || editFormData.total_hours}
+                <div className="text-right">
+                  <span className="text-slate-500 font-bold block uppercase tracking-wider text-[10px]">Funcionário</span>
+                  <span className="text-orange-400 font-extrabold text-sm">{auditEditRecord.employee}</span>
+                </div>
+              </div>
+
+              {/* TIMESTAMPS / ORIGINAL WORK */}
+              <div className="grid grid-cols-2 gap-4 text-xs pt-1">
+                <div>
+                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] block">Entrada 1</span>
+                  <span className="text-white font-mono font-extrabold text-sm px-2 py-1 rounded bg-slate-950 border border-slate-700/30 mt-1 inline-block">
+                    {getHorarioDisplay(auditEditRecord.p.entrada1)}
                   </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] block">Entrada 2</span>
+                  <span className="text-white font-mono font-extrabold text-sm px-2 py-1 rounded bg-slate-950 border border-slate-700/30 mt-1 inline-block">
+                    {getHorarioDisplay(auditEditRecord.p.entrada2)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-xs pt-1 border-t border-slate-700/30 mt-1">
+                <div>
+                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] block">Obra Período 1 Atual</span>
+                  <p className="text-emerald-450 font-bold mt-1 truncate" title={auditEditRecord.obra_periodo_1_atual || 'Não informada'}>
+                    {auditEditRecord.obra_periodo_1_atual || 'Não informada'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] block">Obra Período 2 Atual</span>
+                  <p className="text-emerald-450 font-bold mt-1 truncate" title={auditEditRecord.obra_periodo_2_atual || 'Não informada'}>
+                    {auditEditRecord.obra_periodo_2_atual || 'Não informada'}
+                  </p>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <Input label="Obra Período 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
-              <Input label="Obra Período 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
-            </div>
-
-            <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700 space-y-4">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Coordenadas GPS (Opcional)</p>
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Lat E1" value={editFormData.entrada1_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng E1" value={editFormData.entrada1_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lng: e.target.value })} placeholder="Longitude" />
-                <Input label="Lat S1" value={editFormData.saida1_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng S1" value={editFormData.saida1_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lng: e.target.value })} placeholder="Longitude" />
+            {/* DIAGNÓSTICO E SUGESTÃO */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="bg-rose-950/10 border border-rose-900/20 p-3 rounded-xl">
+                <span className="text-rose-400 font-black uppercase tracking-wider text-[9px] block mb-1">Diagnóstico</span>
+                <p className="text-xs text-slate-300 italic font-medium leading-relaxed">
+                  {auditEditRecord.reason}
+                </p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Lat E2" value={editFormData.entrada2_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng E2" value={editFormData.entrada2_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lng: e.target.value })} placeholder="Longitude" />
-                <Input label="Lat S2" value={editFormData.saida2_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lat: e.target.value })} placeholder="Latitude" />
-                <Input label="Lng S2" value={editFormData.saida2_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lng: e.target.value })} placeholder="Longitude" />
+              <div className="bg-emerald-950/10 border border-emerald-900/20 p-3 rounded-xl">
+                <span className="text-emerald-400 font-black uppercase tracking-wider text-[9px] block mb-1">Sugestão da Auditoria</span>
+                <div className="text-xs text-slate-300 space-y-1 font-medium">
+                  <p>P1: <span className="font-bold underline text-emerald-400">{auditEditRecord.sugestao_p1 || 'Consistente'}</span></p>
+                  <p>P2: <span className="font-bold underline text-emerald-400">{auditEditRecord.sugestao_p2 || 'Consistente'}</span></p>
+                </div>
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Observação</label>
-              <textarea
-                value={editFormData.obs || ''}
-                onChange={e => setEditFormData({ ...editFormData, obs: e.target.value })}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all h-24 resize-none"
-              />
+            {/* EDICIONADOS FORM FIELDS */}
+            <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-700/30 space-y-3">
+              <h4 className="text-slate-200 text-xs font-black uppercase tracking-wider border-b border-slate-700/30 pb-2">Corrigir Obra do Sistema</h4>
+              
+              <div className="space-y-3.5">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                    Obra Período 1
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={auditEditWorkP1}
+                      onChange={(e) => setAuditEditWorkP1(e.target.value)}
+                      className="flex-1 bg-slate-950 text-white rounded-lg border border-slate-700/30 p-2 text-xs outline-none focus:ring-1 focus:ring-orange-500/50 font-bold"
+                    >
+                      <option value="">Selecione uma obra...</option>
+                      <option value="Não informada">Não informada</option>
+                      {works.map((w) => (
+                        <option key={w.id} value={w.name}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
+                    {auditEditRecord.sugestao_p1 && auditEditRecord.sugestao_p1 !== 'Não informada' && (
+                      <button
+                        type="button"
+                        onClick={() => setAuditEditWorkP1(auditEditRecord.sugestao_p1)}
+                        className="bg-emerald-900/25 hover:bg-emerald-900/40 border border-emerald-800/55 text-emerald-400 text-[10px] uppercase font-black px-2 py-1 rounded-lg transition"
+                        title="Usar sugestão da auditoria"
+                      >
+                        Sugestão
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1.5">
+                    Obra Período 2
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={auditEditWorkP2}
+                      onChange={(e) => setAuditEditWorkP2(e.target.value)}
+                      className="flex-1 bg-slate-950 text-white rounded-lg border border-slate-700/30 p-2 text-xs outline-none focus:ring-1 focus:ring-orange-500/50 font-bold"
+                    >
+                      <option value="">Selecione uma obra...</option>
+                      <option value="Não informada">Não informada</option>
+                      {works.map((w) => (
+                        <option key={w.id} value={w.name}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
+                    {auditEditRecord.sugestao_p2 && auditEditRecord.sugestao_p2 !== 'Não informada' && (
+                      <button
+                        type="button"
+                        onClick={() => setAuditEditWorkP2(auditEditRecord.sugestao_p2)}
+                        className="bg-emerald-900/25 hover:bg-emerald-900/40 border border-emerald-800/55 text-emerald-400 text-[10px] uppercase font-black px-2 py-1 rounded-lg transition"
+                        title="Usar sugestão da auditoria"
+                      >
+                        Sugestão
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="pt-4">
-              <Button type="submit" className="w-full py-3" loading={isSubmitting}>Salvar Alterações</Button>
+
+            {/* ACTIONS */}
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-800/40">
+              <button
+                type="button"
+                onClick={() => setIsAuditEditModalOpen(false)}
+                className="bg-slate-900 hover:bg-slate-800 text-white border border-slate-800 hover:border-slate-700 font-black text-xs uppercase tracking-wider py-2 px-4 rounded-lg transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs uppercase tracking-wider py-2 px-4 rounded-lg transition shadow-md shadow-amber-950/25"
+              >
+                {isSubmitting ? 'Salvando...' : 'Salvar Ajuste Manual'}
+              </button>
             </div>
+
           </form>
         )}
+      </Modal>
+
+      <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="Editar Registro de Ponto">
+        {editFormData && (() => {
+          const userObj = users.find(u => String(u.id) === String(editFormData.user_id));
+          const metrics = calculateRecordMetrics(editFormData, userObj?.valor_diaria || 0, users);
+          const calculatedStatus = calculateWorkStatus(editFormData);
+          const hasEntrada1 = getHorarioDisplay(editFormData.entrada1) !== '--:--';
+          const isPointOpen = hasEntrada1 && calculatedStatus !== WorkStatus.ENCERRADO;
+
+          return (
+            <form onSubmit={saveEditPoint} className="space-y-4 pb-2">
+              {/* 1. HORÁRIOS */}
+              <div className="grid grid-cols-2 gap-3">
+                <Input 
+                  label="Entrada 1" 
+                  value={getHorarioDisplay(editFormData.entrada1)} 
+                  onChange={e => {
+                    const val = e.target.value;
+                    setEditFormData({ 
+                      ...editFormData, 
+                      entrada1: typeof editFormData.entrada1 === 'object' 
+                        ? { ...editFormData.entrada1, horario: val } 
+                        : val 
+                    });
+                  }} 
+                  placeholder="00:00"
+                />
+                <Input 
+                  label="Saída 1" 
+                  value={getHorarioDisplay(editFormData.saida1)} 
+                  onChange={e => {
+                    const val = e.target.value;
+                    setEditFormData({ 
+                      ...editFormData, 
+                      saida1: typeof editFormData.saida1 === 'object' 
+                        ? { ...editFormData.saida1, horario: val } 
+                        : val 
+                    });
+                  }} 
+                  placeholder="00:00" 
+                />
+                <Input 
+                  label="Entrada 2" 
+                  value={getHorarioDisplay(editFormData.entrada2)} 
+                  onChange={e => {
+                    const val = e.target.value;
+                    setEditFormData({ 
+                      ...editFormData, 
+                      entrada2: typeof editFormData.entrada2 === 'object' 
+                        ? { ...editFormData.entrada2, horario: val } 
+                        : val 
+                    });
+                  }} 
+                  placeholder="00:00" 
+                />
+                <Input 
+                  label="Saída 2" 
+                  value={getHorarioDisplay(editFormData.saida2)} 
+                  onChange={e => {
+                    const val = e.target.value;
+                    setEditFormData({ 
+                      ...editFormData, 
+                      saida2: typeof editFormData.saida2 === 'object' 
+                        ? { ...editFormData.saida2, horario: val } 
+                        : val 
+                    });
+                  }} 
+                  placeholder="00:00" 
+                />
+              </div>
+
+              {/* 2. OBRAS */}
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Obra Período 1" value={editFormData.entrada1_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_obra: e.target.value })} />
+                <Input label="Obra Período 2" value={editFormData.entrada2_obra || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_obra: e.target.value })} />
+              </div>
+
+              {/* 3. OBSERVAÇÕES */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Observações do Registro</label>
+                <textarea
+                  value={editFormData.obs || ''}
+                  onChange={e => setEditFormData({ ...editFormData, obs: e.target.value })}
+                  placeholder="Comentários sobre a diária..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all h-20 resize-none"
+                />
+              </div>
+
+              {/* 4. AÇÕES ADM & STATUS */}
+              <div className="space-y-1.5 pt-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status do Registro</label>
+                <select
+                  value={editFormData?.status || ''}
+                  onChange={e => {
+                    if (editFormData) {
+                      setEditFormData({ ...editFormData, status: e.target.value as WorkStatus });
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-600/50 transition-all appearance-none"
+                >
+                  <option value={WorkStatus.TRABALHANDO}>Trabalhando</option>
+                  <option value={WorkStatus.PAUSADO}>Pausado</option>
+                  <option value={WorkStatus.ENCERRADO}>Encerrado</option>
+                </select>
+              </div>
+
+              {isPointOpen && (
+                <div className="pt-2">
+                  <Button 
+                    type="button" 
+                    onClick={handleCloseShiftManually} 
+                    className="w-full py-3 bg-red-600 hover:bg-red-700 text-white flex items-center justify-center gap-2 border-none transition-all shadow-lg active:scale-95" 
+                    loading={isSubmitting}
+                  >
+                    <Clock size={16} /> Encerrar Jornada Manualmente
+                  </Button>
+                </div>
+              )}
+
+              {/* 5. CÁLCULOS / MÉTRICAS */}
+              <div className="grid grid-cols-3 gap-2 mt-4">
+                <div className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex flex-col items-center justify-center gap-1">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest text-center">Horas</span>
+                  <span className="text-sm font-black text-white">{metrics.workedHours}</span>
+                </div>
+                <div className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex flex-col items-center justify-center gap-1">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest text-center">Diárias</span>
+                  <span className="text-sm font-black text-white">{metrics.diariasEquivalentes.toFixed(2)}</span>
+                </div>
+                <div className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex flex-col items-center justify-center gap-1">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest text-center">Valor</span>
+                  <span className="text-sm font-black text-green-400">R$ {metrics.totalValue.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* 6. GPS COLLAPSIBLE */}
+              <details className="p-3 bg-slate-800/50 rounded-xl border border-slate-700 group mt-4">
+                <summary className="text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer list-none flex items-center justify-between group-open:mb-3">
+                  <span>▶ Coordenadas GPS (Opcional)</span>
+                </summary>
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <Input label="Lat E1" value={editFormData.entrada1_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lat: e.target.value })} placeholder="Lat" />
+                  <Input label="Lng E1" value={editFormData.entrada1_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada1_lng: e.target.value })} placeholder="Lng" />
+                  <Input label="Lat S1" value={editFormData.saida1_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lat: e.target.value })} placeholder="Lat" />
+                  <Input label="Lng S1" value={editFormData.saida1_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida1_lng: e.target.value })} placeholder="Lng" />
+                  <Input label="Lat E2" value={editFormData.entrada2_lat || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lat: e.target.value })} placeholder="Lat" />
+                  <Input label="Lng E2" value={editFormData.entrada2_lng || ''} onChange={e => setEditFormData({ ...editFormData, entrada2_lng: e.target.value })} placeholder="Lng" />
+                  <Input label="Lat S2" value={editFormData.saida2_lat || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lat: e.target.value })} placeholder="Lat" />
+                  <Input label="Lng S2" value={editFormData.saida2_lng || ''} onChange={e => setEditFormData({ ...editFormData, saida2_lng: e.target.value })} placeholder="Lng" />
+                </div>
+              </details>
+
+              {/* 7. BOTÃO SALVAR (Sempre visível próximo ao final) */}
+              <div className="pt-6 sticky bottom-0 z-10 w-full mb-2">
+                <Button type="submit" className="w-full py-4 uppercase font-black tracking-widest text-sm shadow-xl" loading={isSubmitting}>Salvar Alterações</Button>
+              </div>
+            </form>
+          );
+        })()}
       </Modal>
 
       <Modal isOpen={isManualModalOpen} onClose={() => setIsManualModalOpen(false)} title="Inserir Registro Manual">
@@ -4532,13 +5572,736 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               <PointDetail label="Entrada 2" time={selectedPoint.entrada2} />
               <PointDetail label="Saída 2" time={selectedPoint.saida2} />
             </div>
-            
+
             <div className="p-4 bg-slate-900 rounded-2xl border border-slate-700">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Observações</p>
               <p className="text-sm text-slate-300 italic">"{selectedPoint.obs || 'Nenhuma observação registrada.'}"</p>
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* MODAL DE AUDITORIA DE OBRAS */}
+      <Modal isOpen={isAuditModalOpen} onClose={() => setIsAuditModalOpen(false)} title="Auditoria de Obras do Sistema" size="xl">
+        {(() => {
+          const auditList = runAudit();
+          const total = auditList.length;
+          const corrigidos = auditList.filter(r => r.status === 'corrigido').length;
+          const seguros = auditList.filter(r => r.status === 'seguro').length;
+          const revisar = auditList.filter(r => r.status === 'revisar').length;
+
+          // Apply search and status filters
+          const filteredAuditList = auditList.filter(r => {
+            // Status Filter
+            if (auditFilter !== 'todos' && r.status !== auditFilter) {
+              return false;
+            }
+
+            // Search Query
+            if (auditSearchQuery.trim()) {
+              const query = auditSearchQuery.toLowerCase();
+              const employeeMatch = r.employee.toLowerCase().includes(query);
+              const formattedDate = new Date(r.date + 'T00:00:00').toLocaleDateString('pt-BR');
+              const dateMatch = formattedDate.includes(query) || r.date.includes(query);
+              
+              const obraMatch = 
+                (r.entrada1_obra || '').toLowerCase().includes(query) ||
+                (r.work_name || '').toLowerCase().includes(query) ||
+                (r.entrada2_obra || '').toLowerCase().includes(query) ||
+                (r.obra_periodo_1_atual || '').toLowerCase().includes(query) ||
+                (r.obra_periodo_2_atual || '').toLowerCase().includes(query) ||
+                (r.sugestao_p1 || '').toLowerCase().includes(query) ||
+                (r.sugestao_p2 || '').toLowerCase().includes(query);
+
+              return employeeMatch || dateMatch || obraMatch;
+            }
+
+            return true;
+          });
+
+          // Pagination
+          const totalItems = filteredAuditList.length;
+          const totalPages = Math.ceil(totalItems / auditPageSize) || 1;
+          const startIndex = (auditPage - 1) * auditPageSize;
+          const paginatedAuditList = filteredAuditList.slice(startIndex, startIndex + auditPageSize);
+
+          // Excel exporter
+          const handleExportAuditoria = () => {
+            try {
+              const dataToExport = filteredAuditList.map(r => ({
+                'Data': new Date(r.date + 'T00:00:00').toLocaleDateString('pt-BR'),
+                'Funcionário': r.employee,
+                'Campos Legados (E1 Obra)': r.entrada1_obra || '',
+                'Campos Legados (Work Name)': r.work_name || '',
+                'Campos Legados (E2 Obra)': r.entrada2_obra || '',
+                'Obra Período 1 Atual': r.obra_periodo_1_atual || 'Não informada',
+                'Obra Período 2 Atual': r.obra_periodo_2_atual || 'Não informada',
+                'Sugestão Período 1': r.sugestao_p1,
+                'Sugestão Período 2': r.sugestao_p2,
+                'Status': r.status === 'seguro' ? 'Seguro' : r.status === 'revisar' ? 'Revisar' : 'Corrigido',
+                'Motivo / Diagnóstico': r.reason
+              }));
+
+              const ws = XLSX.utils.json_to_sheet(dataToExport);
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, ws, 'Relatorio_Auditoria');
+              XLSX.writeFile(wb, `Auditoria_Obras_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
+            } catch (err) {
+              console.error(err);
+              alert('Erro ao exportar auditoria.');
+            }
+          };
+
+          return (
+            <div className="flex flex-col h-[80vh] space-y-2.5">
+              
+              {/* FIXED ACTION TOP BAR */}
+              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-700/30 shadow-xl space-y-2.5 shrink-0">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                  
+                  {/* Action buttons demanded always visible at the top */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button 
+                      onClick={() => aplicarCorrecaoSegura(auditList)}
+                      disabled={seguros === 0 || isMigrating}
+                      variant="primary" 
+                      className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 flex items-center gap-1.5 text-xs px-3 py-1.5 font-bold rounded-lg shadow transition-all hover:scale-[1.02] active:scale-95 select-none animate-none"
+                    >
+                      {isMigrating ? (
+                        <span className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
+                      ) : (
+                        <CheckCheck size={14} className="text-white" />
+                      )}
+                      Aplicar Correção Segura ({seguros})
+                    </Button>
+
+                    <Button 
+                      onClick={handleExportAuditoria}
+                      variant="secondary"
+                      className="bg-slate-900 hover:bg-slate-800 border border-slate-700/30 text-white flex items-center gap-1.5 text-xs px-3 py-1.5 font-bold rounded-lg transition-all hover:scale-[1.02] active:scale-95"
+                    >
+                      <Download size={14} className="text-sky-400" />
+                      Exportar Auditoria (.XLSX)
+                    </Button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuditFilter('revisar');
+                        setAuditPage(1);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border uppercase tracking-wider hover:scale-[1.02] active:scale-95 ${
+                        auditFilter === 'revisar'
+                          ? 'bg-amber-500 border-amber-400 text-slate-950 shadow'
+                          : 'bg-slate-900 border-slate-700/30 text-amber-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <AlertTriangle size={14} />
+                      Filtrar Revisão ({revisar})
+                    </button>
+                  </div>
+
+                  {/* Status pills selector */}
+                  <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-700/30 self-start xl:self-auto shrink-0 shadow-inner">
+                    {[
+                      { key: 'todos', label: 'Todos' },
+                      { key: 'seguro', label: 'Seguros' },
+                      { key: 'revisar', label: 'Revisão' },
+                      { key: 'corrigido', label: 'Corrigidos' }
+                    ].map(f => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => {
+                          setAuditFilter(f.key as any);
+                          setAuditPage(1);
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all uppercase tracking-wider ${
+                          auditFilter === f.key 
+                            ? 'bg-orange-600 text-white shadow' 
+                            : 'hover:bg-slate-850 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Filter and Search query input */}
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input
+                      type="text"
+                      placeholder="Pesquisar por funcionário, data (DD/MM/AAAA) ou nome de obra..."
+                      value={auditSearchQuery}
+                      onChange={e => {
+                        setAuditSearchQuery(e.target.value);
+                        setAuditPage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700/30 rounded-lg pl-9 pr-8 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-orange-600/50 placeholder:text-slate-500 transition-all font-medium"
+                    />
+                    {auditSearchQuery && (
+                      <button 
+                        onClick={() => {
+                          setAuditSearchQuery('');
+                          setAuditPage(1);
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between sm:justify-start gap-3 px-1 shrink-0 text-[11px] font-bold text-slate-400">
+                    <span>
+                      Mostrando {Math.min(totalItems, startIndex + paginatedAuditList.length)} de {totalItems} registros {auditFilter !== 'todos' ? `(${auditFilter})` : ''} 
+                    </span>
+                    {auditSearchQuery.trim() && (
+                      <span className="text-orange-400 bg-orange-950/50 border border-orange-900/60 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono">
+                        Filtrado
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* INDICATOR CARDS - FIXED */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0 shadow-md">
+                <div className="bg-slate-950 p-2 px-3 rounded-lg border border-slate-700/30 flex items-center gap-2.5 transition-all hover:border-slate-700/50">
+                  <div className="p-1.5 rounded-md bg-slate-900 text-slate-400 shrink-0">
+                    <Database size={15} />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-0.5">Total Geral</p>
+                    <p className="text-base font-extrabold text-white leading-tight">{total}</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 p-2 px-3 rounded-lg border border-slate-700/30 flex items-center gap-2.5 transition-all hover:border-slate-700/50">
+                  <div className="p-1.5 rounded-md bg-slate-900 text-sky-400 shrink-0">
+                    <ShieldCheck size={15} />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-0.5">Já Corrigidos</p>
+                    <p className="text-base font-extrabold text-sky-400 leading-tight">{corrigidos}</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 p-2 px-3 rounded-lg border border-slate-700/30 flex items-center gap-2.5 transition-all hover:border-slate-700/50">
+                  <div className="p-1.5 rounded-md bg-slate-900 text-emerald-400 shrink-0">
+                    <CheckCheck size={15} />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-0.5">Seguros</p>
+                    <p className="text-base font-extrabold text-emerald-400 leading-tight">{seguros}</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 p-2 px-3 rounded-lg border border-slate-700/30 flex items-center gap-2.5 transition-all hover:border-slate-700/50">
+                  <div className="p-1.5 rounded-md bg-slate-900 text-amber-400 shrink-0">
+                    <AlertTriangle size={15} />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-0.5">Revisão Manual</p>
+                    <p className="text-base font-extrabold text-amber-400 leading-tight">{revisar}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* MAIN CONTENT AREA - SCROLLABLE WITHOUT INTERNAL ROLLS */}
+              <div className="flex-1 overflow-auto bg-slate-950 border border-slate-700/30 rounded-2xl min-h-0">
+                {paginatedAuditList.length === 0 ? (
+                  <div className="p-16 text-center space-y-3">
+                    <AlertTriangle className="mx-auto text-slate-550" size={48} />
+                    <p className="text-slate-350 font-bold text-lg">Nenhum registro encontrado para os filtros selecionados.</p>
+                    <p className="text-sm text-slate-500 max-w-md mx-auto">Experimente alterar os filtros de status ou a palavra digitada na busca.</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* DESKTOP VIEW - TABLE LIST */}
+                    <div className="hidden md:block">
+                      <table className="w-full text-left border-collapse table-fixed xl:table-auto">
+                        <thead>
+                          <tr className="sticky top-0 bg-slate-900/95 backdrop-blur border-b border-slate-700/30 text-slate-450 text-[10px] font-black uppercase tracking-wider z-10 shadow-sm">
+                            <th className="px-3 py-2 w-[110px] sticky top-0">Data</th>
+                            <th className="px-3 py-2 w-[160px] sticky top-0">Funcionário</th>
+                            <th className="px-2 py-2 w-[75px] text-center sticky top-0">E1</th>
+                            <th className="px-3 py-2 w-[180px] sticky top-0">Obra Período 1</th>
+                            <th className="px-2 py-2 w-[75px] text-center sticky top-0">E2</th>
+                            <th className="px-3 py-2 w-[180px] sticky top-0">Obra Período 2</th>
+                            <th className="px-3 py-2 w-[150px] text-center sticky top-0">Status</th>
+                            <th className="px-4 py-2 w-[220px] sticky top-0">Diagnóstico</th>
+                            <th className="px-3 py-2 w-[160px] text-right sticky top-0">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/30 text-xs">
+                          {paginatedAuditList.map(r => {
+                            const isConflict = r.reason.toLowerCase().includes('conflito');
+                            let statusColor = "bg-slate-900 border-slate-805 text-slate-400";
+                            let statusLabel = "Nenhum";
+                            let rowCustomBg = ""; 
+
+                            if (r.status === 'seguro') {
+                              statusColor = "bg-emerald-500/10 border-emerald-500/40 text-emerald-400";
+                              statusLabel = "Seguro / Consistente";
+                            } else if (r.status === 'corrigido') {
+                              statusColor = "bg-blue-500/10 border-blue-500/40 text-blue-450";
+                              statusLabel = "🛡️ Já Corrigido";
+                            } else if (r.status === 'revisar') {
+                              if (isConflict) {
+                                statusColor = "bg-rose-500/10 border-rose-500/40 text-rose-400";
+                                statusLabel = "🔴 Divergência Crítica";
+                                rowCustomBg = "bg-rose-950/10 border-l-2 border-l-rose-500";
+                              } else {
+                                statusColor = "bg-amber-500/10 border-amber-500/40 text-amber-400";
+                                statusLabel = "⚠️ Revisão Manual";
+                                rowCustomBg = "bg-amber-950/10 border-l-2 border-l-amber-500";
+                              }
+                            }
+
+                            const dateObj = new Date(r.date + 'T00:00:00');
+                            const formattedDate = dateObj.toLocaleDateString('pt-BR');
+                            const weekday = dateObj.toLocaleDateString('pt-BR', { weekday: 'long' });
+
+                            return (
+                              <tr 
+                                key={r.id} 
+                                className={`hover:bg-slate-900/50 transition-all ${rowCustomBg}`}
+                              >
+                                {/* 1. Data */}
+                                <td className="px-3 py-1.5 whitespace-nowrap">
+                                  <span className="text-white font-extrabold block text-xs">{formattedDate}</span>
+                                  <span className="text-[10px] text-slate-500 font-bold capitalize">{weekday.replace('-feira', '')}</span>
+                                </td>
+
+                                {/* 2. Funcionário */}
+                                <td className="px-3 py-1.5">
+                                  <span className="text-orange-400 font-extrabold block text-xs truncate max-w-[150px]" title={r.employee}>
+                                    {r.employee}
+                                  </span>
+                                  <span className="text-[9px] text-slate-500 font-mono font-bold tracking-wider block">ID: {r.id.slice(0, 6)}</span>
+                                </td>
+
+                                {/* 3. Entrada 1 */}
+                                <td className="px-2 py-1.5 text-center">
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800/85 text-white font-extrabold font-mono shadow-inner">
+                                    {getHorarioDisplay(r.p.entrada1)}
+                                  </span>
+                                </td>
+
+                                {/* 4. Obra Período 1 */}
+                                <td className="px-3 py-1.5">
+                                  <div className="space-y-0.5 max-w-[170px]">
+                                    <span className="text-emerald-400 font-bold text-xs block truncate" title={r.obra_periodo_1_atual || 'Não informada'}>
+                                      {r.obra_periodo_1_atual || 'Não informada'}
+                                    </span>
+                                    {r.entrada1_obra && r.entrada1_obra !== r.obra_periodo_1_atual && (
+                                      <span className="text-[10px] text-slate-400 font-medium block truncate">Origem: <span className="underline">{r.entrada1_obra}</span></span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* 5. Entrada 2 */}
+                                <td className="px-2 py-1.5 text-center">
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800/85 text-white font-extrabold font-mono shadow-inner">
+                                    {getHorarioDisplay(r.p.entrada2)}
+                                  </span>
+                                </td>
+
+                                {/* 6. Obra Período 2 */}
+                                <td className="px-3 py-1.5">
+                                  <div className="space-y-0.5 max-w-[170px]">
+                                    <span className="text-emerald-400 font-bold text-xs block truncate" title={r.obra_periodo_2_atual || 'Não informada'}>
+                                      {r.obra_periodo_2_atual || 'Não informada'}
+                                    </span>
+                                    {r.entrada2_obra && r.entrada2_obra !== r.obra_periodo_2_atual && (
+                                      <span className="text-[10px] text-slate-400 font-medium block truncate">Origem: <span className="underline">{r.entrada2_obra}</span></span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* 7. Status */}
+                                <td className="px-3 py-1.5 whitespace-nowrap text-center">
+                                  <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full border text-[9px] font-black tracking-wide uppercase ${statusColor}`}>
+                                    {statusLabel}
+                                  </span>
+                                </td>
+
+                                {/* 8. Diagnóstico */}
+                                <td className="px-4 py-1.5">
+                                  <div className="flex items-center gap-1.5 max-w-[210px]">
+                                    {statusLabel.includes('⚠️') || statusLabel.includes('🔴') ? (
+                                      <AlertTriangle size={12} className="text-orange-400 shrink-0" />
+                                    ) : (
+                                      <CheckCheck size={12} className="text-emerald-400 shrink-0" />
+                                    )}
+                                    <span className="text-slate-300 font-semibold text-[10px] leading-tight block truncate" title={r.reason}>
+                                      {r.reason}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                {/* 9. Ações */}
+                                <td className="px-3 py-1.5 whitespace-nowrap text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedDetailRecord(r)}
+                                      className="bg-slate-900 hover:bg-slate-800 hover:text-orange-450 border border-slate-800/80 text-white font-bold text-[10px] py-1 px-2 rounded hover:border-slate-700/60 transition shadow-sm"
+                                    >
+                                      Metadados
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAuditEditRecord(r);
+                                        setAuditEditWorkP1(r.obra_periodo_1_atual || r.sugestao_p1 || '');
+                                        setAuditEditWorkP2(r.obra_periodo_2_atual || r.sugestao_p2 || '');
+                                        setIsAuditEditModalOpen(true);
+                                      }}
+                                      className={`font-black text-[10px] py-1 px-2.5 rounded hover:opacity-95 transition-all shadow uppercase tracking-wider ${
+                                        r.status === 'revisar'
+                                          ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 focus:ring-2 focus:ring-amber-400'
+                                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-800/70'
+                                      }`}
+                                    >
+                                      Editar
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* MOBILE VIEW - ADAPTIVE CARDS */}
+                    <div className="grid grid-cols-1 gap-4 md:hidden p-4">
+                      {paginatedAuditList.map(r => {
+                        const isConflict = r.reason.toLowerCase().includes('conflito');
+                        let statusColor = "bg-slate-900 border-slate-800 text-slate-400";
+                        let statusLabel = "Nenhum";
+                        let borderLeftStyle = "border-slate-700/30 bg-slate-900/10";
+
+                        if (r.status === 'seguro') {
+                          statusColor = "bg-emerald-500/10 border-emerald-500/40 text-emerald-400";
+                          statusLabel = "✅ Seguro / Consistente";
+                          borderLeftStyle = "border-emerald-950/40 bg-emerald-950/5 border-l-4 border-l-emerald-500";
+                        } else if (r.status === 'corrigido') {
+                          statusColor = "bg-blue-500/10 border-blue-500/40 text-blue-400";
+                          statusLabel = "🛡️ Já Corrigido";
+                          borderLeftStyle = "border-blue-950/40 bg-blue-950/5 border-l-4 border-l-blue-500";
+                        } else if (r.status === 'revisar') {
+                          if (isConflict) {
+                            statusColor = "bg-rose-500/10 border-rose-500/40 text-rose-450";
+                            statusLabel = "🔴 Divergência Crítica";
+                            borderLeftStyle = "border-rose-950/40 bg-rose-950/5 border-l-4 border-l-rose-500";
+                          } else {
+                            statusColor = "bg-amber-500/10 border-amber-500/40 text-amber-400";
+                            statusLabel = "⚠️ Revisão Manual";
+                            borderLeftStyle = "border-amber-950/40 bg-amber-950/5 border-l-4 border-l-amber-500";
+                          }
+                        }
+
+                        const dateObj = new Date(r.date + 'T00:00:00');
+                        const formattedDate = dateObj.toLocaleDateString('pt-BR');
+
+                        return (
+                          <div key={r.id} className={`p-4 rounded-xl border ${borderLeftStyle} space-y-4 shadow-sm`}>
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="text-white font-extrabold text-base">{formattedDate}</h4>
+                                <span className="text-xs text-slate-500 capitalize font-bold">{dateObj.toLocaleDateString('pt-BR', { weekday: 'long' })}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-orange-400 font-extrabold text-sm block">{r.employee}</span>
+                                <span className="text-[10px] text-slate-500 font-mono font-bold uppercase tracking-wider block mt-0.5">Reg: {r.id.slice(0, 8)}</span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 bg-slate-900/40 p-3.5 rounded-xl border border-slate-700/30">
+                              <div>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">P1 & Entrada 1</p>
+                                <p className="text-xs text-white font-extrabold font-mono mb-1">{getHorarioDisplay(r.p.entrada1)}</p>
+                                <p className="text-xs text-emerald-400 font-bold truncate">{r.obra_periodo_1_atual || 'Não informada'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">P2 & Entrada 2</p>
+                                <p className="text-xs text-white font-extrabold font-mono mb-1">{getHorarioDisplay(r.p.entrada2)}</p>
+                                <p className="text-xs text-emerald-400 font-bold truncate">{r.obra_periodo_2_atual || 'Não informada'}</p>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-450 font-bold uppercase tracking-wider">Status:</span>
+                                <span className={`inline-flex px-3 py-1.5 rounded-full text-[10px] font-black uppercase border tracking-wider ${statusColor}`}>
+                                  {statusLabel}
+                                </span>
+                              </div>
+                              <div className="bg-slate-900/40 border border-slate-700/30 p-3 rounded-xl">
+                                <p className="text-[10px] text-slate-500 font-black uppercase tracking-wider mb-1">Diagnóstico:</p>
+                                <p className="text-xs text-slate-300 italic leading-relaxed">{r.reason}</p>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/30">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedDetailRecord(r)}
+                                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5 px-3 border border-slate-700/30 hover:border-slate-700/60 rounded-lg transition text-center"
+                              >
+                                Metadados
+                              </button>
+                              {r.status === 'revisar' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPoint(r.p);
+                                    setIsEditModalOpen(true);
+                                  }}
+                                  className="w-full bg-orange-600 hover:bg-orange-700 text-slate-100 font-extrabold text-xs py-2.5 px-3 rounded-lg transition text-center"
+                                >
+                                  Editar Ponto
+                                </button>
+                              ) : (
+                                <div className="w-full bg-slate-900/30 text-slate-650 font-bold text-xs py-2.5 px-3 rounded-lg border border-slate-700/30 text-center select-none">
+                                  Consistente
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* PAGINATION AND LIMITS SELECTOR - FIXED */}
+              <div className="flex flex-col sm:flex-row items-center justify-between bg-slate-950 p-4 rounded-2xl border border-slate-700/30 gap-4 shrink-0 shadow-xl">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Por página:</span>
+                  <select 
+                    value={auditPageSize} 
+                    onChange={(e) => {
+                      setAuditPageSize(Number(e.target.value));
+                      setAuditPage(1);
+                    }}
+                    className="bg-slate-900 text-white rounded-xl border border-slate-700/30 px-3.5 py-2 text-sm outline-none focus:ring-1 focus:ring-orange-500/50 font-bold"
+                  >
+                    <option value={12}>12 registros</option>
+                    <option value={24}>24 registros</option>
+                    <option value={50}>50 registros</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end font-medium">
+                  <button
+                    type="button"
+                    disabled={auditPage === 1}
+                    onClick={() => setAuditPage(p => Math.max(1, p - 1))}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-sm font-bold text-white rounded-xl border border-slate-700/30 transition-all flex items-center gap-1 hover:scale-[1.02] active:scale-95"
+                  >
+                    Anterior
+                  </button>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[10px] font-black text-slate-550 uppercase tracking-widest">
+                      Página
+                    </span>
+                    <span className="bg-slate-900 px-3.5 py-1.5 rounded-xl border border-slate-700/30 text-sm font-black text-orange-400 font-mono shadow-inner">
+                      {auditPage}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500">
+                      de <span className="text-white font-bold">{totalPages}</span>
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={auditPage === totalPages}
+                    onClick={() => setAuditPage(p => Math.min(totalPages, p + 1))}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-sm font-bold text-white rounded-xl border border-slate-700/30 transition-all flex items-center gap-1 hover:scale-[1.02] active:scale-95"
+                  >
+                    Próximo
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* AUXILIARY DETAILED METADATA COMPASS OVERLAY MODAL */}
+      <Modal 
+        isOpen={selectedDetailRecord !== null} 
+        onClose={() => setSelectedDetailRecord(null)} 
+        title="Auditoria - Informações de Metadados" 
+        size="lg"
+        zIndexClass="z-[70]"
+      >
+        {selectedDetailRecord && (() => {
+          const r = selectedDetailRecord;
+          const isConflict = r.reason.toLowerCase().includes('conflito');
+          
+          let statusColor = "bg-slate-900 border-slate-800 text-slate-400";
+          let statusLabel = "Nenhum";
+          if (r.status === 'seguro') {
+            statusColor = "bg-emerald-500/10 border-emerald-500/35 text-emerald-400";
+            statusLabel = "✅ Seguro / Consistente";
+          } else if (r.status === 'corrigido') {
+            statusColor = "bg-blue-500/10 border-blue-500/35 text-blue-400";
+            statusLabel = "🛡️ Já Corrigido";
+          } else if (r.status === 'revisar') {
+            statusColor = isConflict 
+            ? "bg-rose-500/10 border-rose-500/35 text-rose-400"
+            : "bg-amber-500/10 border-amber-500/35 text-amber-450";
+            statusLabel = isConflict ? "🔴 Divergência Crítica" : "⚠️ Revisão Manual";
+          }
+
+          const dateObj = new Date(r.date + 'T00:00:00');
+          const formattedDate = dateObj.toLocaleDateString('pt-BR');
+
+          return (
+            <div className="space-y-6">
+              
+              {/* Header Info */}
+              <div className="flex flex-col sm:flex-row justify-between items-start gap-4 p-4 bg-slate-900 rounded-2xl border border-slate-800/60">
+                <div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Data do Registro</p>
+                  <h4 className="text-lg font-bold text-white mt-1">{formattedDate} ({dateObj.toLocaleDateString('pt-BR', { weekday: 'long' })})</h4>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-left sm:text-right">Funcionário</p>
+                  <h4 className="text-lg font-black text-orange-400 mt-1">{r.employee}</h4>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5 text-left sm:text-right">ID detalhado: {r.id}</p>
+                </div>
+              </div>
+
+              {/* Status and Diagnostics Alert box */}
+              <div className="p-4 bg-slate-900 border border-slate-800/60 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Status Diagnóstico</span>
+                  <span className={`px-3 py-1.5 rounded-full border text-xs font-black uppercase ${statusColor}`}>
+                    {statusLabel}
+                  </span>
+                </div>
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/50">
+                  <p className="text-sm text-slate-300 italic font-medium leading-relaxed">
+                    💬 "{r.reason}"
+                  </p>
+                </div>
+              </div>
+
+              {/* Comparison columns between old metadata and matching suggested parameters */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                {/* Legacy Data Column */}
+                <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800/60 space-y-4">
+                  <h5 className="text-xs font-black text-slate-400 uppercase tracking-wider pb-2 border-b border-slate-800/50">
+                    📂 Metadados Legados Armazenados
+                  </h5>
+                  
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <p className="text-slate-500 font-bold uppercase text-[9px]">Entrada 1 Obra (Legado):</p>
+                      <p className="font-semibold text-slate-200 mt-0.5 bg-slate-950 p-2 rounded border border-slate-800/40">
+                        {r.entrada1_obra || <span className="italic text-slate-600">Não registrada</span>}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-500 font-bold uppercase text-[9px]">Work Name (Legado Geral):</p>
+                      <p className="font-semibold text-slate-200 mt-0.5 bg-slate-950 p-2 rounded border border-slate-800/40">
+                        {r.work_name || <span className="italic text-slate-600">Não registrada</span>}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-500 font-bold uppercase text-[9px]">Entrada 2 Obra (Legado):</p>
+                      <p className="font-semibold text-slate-200 mt-0.5 bg-slate-950 p-2 rounded border border-slate-800/40">
+                        {r.entrada2_obra || <span className="italic text-slate-600">Não registrada</span>}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Suggestions / Currents Column */}
+                <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800/60 space-y-4">
+                  <h5 className="text-xs font-black text-emerald-400 uppercase tracking-wider pb-2 border-b border-slate-800/50">
+                    💡 Auditoria Atual & Sugestões
+                  </h5>
+
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <p className="text-slate-500 font-bold uppercase text-[9px]">Obra Período 1 Ativa:</p>
+                      <p className="font-bold text-white mt-0.5 bg-slate-950 p-2 rounded border border-slate-800/40 flex justify-between">
+                        <span>P1: {r.obra_periodo_1_atual || 'Não informada'}</span>
+                        <span className="text-xs text-orange-400 font-mono">({getHorarioDisplay(r.p.entrada1)})</span>
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-550 font-bold uppercase text-[9px] text-emerald-400">Sugestão de Obra Período 1:</p>
+                      <p className="font-bold text-emerald-400 mt-0.5 bg-slate-950 p-2 rounded border border-emerald-950/40">
+                        ✨ {r.sugestao_p1}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-500 font-bold uppercase text-[9px]">Obra Período 2 Ativa:</p>
+                      <p className="font-bold text-white mt-0.5 bg-slate-950 p-2 rounded border border-slate-800/40 flex justify-between">
+                        <span>P2: {r.obra_periodo_2_atual || 'Não informada'}</span>
+                        <span className="text-xs text-orange-400 font-mono">({getHorarioDisplay(r.p.entrada2)})</span>
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-450 font-bold uppercase text-[9px] text-emerald-400">Sugestão de Obra Período 2:</p>
+                      <p className="font-bold text-emerald-400 mt-0.5 bg-slate-950 p-2 rounded border border-emerald-950/40">
+                        ✨ {r.sugestao_p2}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Actions Footer */}
+              <div className="pt-4 border-t border-slate-800/50 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailRecord(null)}
+                  className="bg-slate-805 hover:bg-slate-800 border border-slate-800 text-white font-bold text-sm px-5 py-2.5 rounded-xl transition"
+                >
+                  Fechar
+                </button>
+                {r.status === 'revisar' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuditEditRecord(r);
+                      setAuditEditWorkP1(r.obra_periodo_1_atual || r.sugestao_p1 || '');
+                      setAuditEditWorkP2(r.obra_periodo_2_atual || r.sugestao_p2 || '');
+                      setIsAuditEditModalOpen(true);
+                      setSelectedDetailRecord(null);
+                    }}
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-sm px-5 py-2.5 rounded-xl transition shadow-md"
+                  >
+                    Editar Ponto
+                  </button>
+                )}
+              </div>
+
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal isOpen={isBackupModalOpen} onClose={() => setIsBackupModalOpen(false)} title="Gerar Backup por Período">
@@ -4684,6 +6447,19 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
   });
   const [workSummary, setWorkSummary] = useState<any[]>([]);
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const recordsPerPage = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters.userId, filters.workId, filters.startDate, filters.endDate, points]);
+
+  const totalPages = Math.ceil(reportData.length / recordsPerPage) || 1;
+  const paginatedReportData = reportData.slice(
+    (currentPage - 1) * recordsPerPage,
+    currentPage * recordsPerPage
+  );
+
   // Export Modal states
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportType, setExportType] = useState<'pdf' | 'excel'>('pdf');
@@ -4786,9 +6562,9 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const diaria = parseFloat(globalDiariaValue) || 180;
     
     if (pdfDocType === 'recibo') {
-      generateReciboPDF(finalData, totalCostToDisplay, filters, users, diaria, calcMode);
+      generateReciboPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
     } else if (pdfDocType === 'fechamento') {
-      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, diaria, calcMode);
+      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
     } else {
       generateOfficialReportPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
     }
@@ -4806,12 +6582,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Valor Total (R$)': p.valorTotal.toFixed(2)
     }));
 
-    const wMap: Record<string, { name: string, workers: Set<string>, mins: number, cost: number }> = {};
+    const wMap: Record<string, { name: string, workers: Set<string>, mins: number, diarias: number, cost: number }> = {};
     finalData.forEach(p => {
       const canon = String(p.workName || 'EXTRA/OUTROS').trim().toUpperCase();
-      if (!wMap[canon]) wMap[canon] = { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, cost: 0 };
+      if (!wMap[canon]) wMap[canon] = { name: p.workName || 'Extra/Outros', workers: new Set(), mins: 0, diarias: 0, cost: 0 };
       wMap[canon].workers.add(p.userId);
       wMap[canon].mins += p.workedMinutes;
+      wMap[canon].diarias += (p.diarias || 0);
       wMap[canon].cost += p.valorTotal;
     });
 
@@ -4819,6 +6596,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
       'Obra': w.name.toUpperCase(),
       'Funcionários': w.workers.size,
       'Total Horas': formatarMinutos(w.mins),
+      'Diárias': w.diarias.toFixed(2),
       'Custo Total (R$)': w.cost.toFixed(2)
     }));
 
@@ -5000,8 +6778,8 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
         </div>
         
         {/* Desktop Table */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+        <div className="hidden md:block overflow-x-auto w-full max-w-full">
+          <table className="w-full text-left border-collapse min-w-full">
             <thead>
               <tr className="bg-slate-900/50">
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Funcionário</th>
@@ -5012,7 +6790,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {reportData.map((p, idx) => (
+              {paginatedReportData.map((p, idx) => (
                 <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-6 py-4 text-sm font-medium text-white">{p.userName}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 uppercase">{p.workName}</td>
@@ -5025,7 +6803,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">{formatCurrency(p.valorTotal)}</td>
                 </tr>
               ))}
-              {reportData.length === 0 && (
+              {paginatedReportData.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-slate-500 italic">Nenhum registro encontrado para os filtros selecionados.</td>
                 </tr>
@@ -5036,7 +6814,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
 
         {/* Mobile Cards */}
         <div className="md:hidden flex flex-col divide-y divide-slate-800">
-          {reportData.map((p, idx) => (
+          {paginatedReportData.map((p, idx) => (
             <div key={idx} className="p-4 space-y-3">
               <div className="flex justify-between items-start">
                 <div>
@@ -5063,12 +6841,55 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
               </div>
             </div>
           ))}
-          {reportData.length === 0 && (
+          {paginatedReportData.length === 0 && (
             <div className="p-8 text-center text-slate-500 italic">
               Nenhum registro encontrado para os filtros selecionados.
             </div>
           )}
         </div>
+
+        {/* Controls pagination */}
+        {totalPages > 1 && (
+          <div className="p-6 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-4 bg-slate-900/10">
+            <div className="text-xs text-slate-400 font-medium">
+              Mostrando <span className="font-bold text-white">{(currentPage - 1) * recordsPerPage + 1}</span> a <span className="font-bold text-white">{Math.min(currentPage * recordsPerPage, reportData.length)}</span> de <span className="font-bold text-white">{reportData.length}</span> registros
+            </div>
+            <div className="flex items-center gap-2 overflow-x-auto max-w-full py-1">
+              <Button 
+                variant="secondary" 
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} 
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 text-xs disabled:opacity-40"
+              >
+                Anterior
+              </Button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(num => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setCurrentPage(num)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      currentPage === num 
+                        ? 'bg-orange-600 text-white' 
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/50'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+              <Button 
+                variant="secondary" 
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} 
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 text-xs disabled:opacity-40"
+              >
+                Próxima
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="p-0 overflow-hidden">
@@ -5084,6 +6905,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nome da Obra</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Funcionários</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Total Horas</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Diárias</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Custo Total</th>
               </tr>
             </thead>
@@ -5093,12 +6915,13 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                   <td className="px-6 py-4 text-sm font-bold text-white uppercase">{w.name}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.employeeCount}</td>
                   <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.hours}</td>
+                  <td className="px-6 py-4 text-sm text-slate-400 text-center">{w.diarias.toFixed(2).replace('.', ',')}</td>
                   <td className="px-6 py-4 text-sm font-bold text-emerald-500 text-right">{formatCurrency(w.cost)}</td>
                 </tr>
               ))}
               {workSummary.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 italic">Nenhum dado de obra disponível.</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 italic">Nenhum dado de obra disponível.</td>
                 </tr>
               )}
             </tbody>
@@ -5120,7 +6943,7 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Func.</p>
                   <p className="text-sm font-bold text-white">{w.employeeCount}</p>
@@ -5128,6 +6951,10 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
                 <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Horas</p>
                   <p className="text-sm font-bold text-orange-500">{w.hours}</p>
+                </div>
+                <div className="bg-slate-800/30 p-2 rounded-lg border border-slate-800/50 text-center">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Diárias</p>
+                  <p className="text-sm font-bold text-emerald-500">{w.diarias.toFixed(2).replace('.', ',')}</p>
                 </div>
               </div>
             </div>
@@ -5312,19 +7139,29 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         pointData.entrada1_obra = segment.obraNome;
         pointData.work_id = segment.obraId;
         pointData.work_name = segment.obraNome;
+        pointData.obra_periodo_1 = segment.obraNome;
       } else if (type === 'saida1') {
         pointData.saida1 = segment;
         pointData.obs_saida1 = obs.trim();
+        if (pointData.entrada1) {
+          pointData.saida1.obraNome = pointData.entrada1.obraNome;
+          pointData.saida1.obraId = pointData.entrada1.obraId;
+        }
         // Reset selected work to force a new choice for Period 2
         setSelectedWorkId("");
       } else if (type === 'entrada2') {
         pointData.entrada2 = segment;
         pointData.obs_entrada2 = obs.trim();
         pointData.entrada2_obra = segment.obraNome;
+        pointData.obra_periodo_2 = segment.obraNome;
         // DO NOT overwrite global work_name/work_id with period 2 to prevent Period 1 displays from breaking
       } else if (type === 'saida2') {
         pointData.saida2 = segment;
         pointData.obs_saida2 = obs.trim();
+        if (pointData.entrada2) {
+          pointData.saida2.obraNome = pointData.entrada2.obraNome;
+          pointData.saida2.obraId = pointData.entrada2.obraId;
+        }
         pointData.encerrado = 1;
         // Reset selection for next day
         setSelectedWorkId("");
@@ -5543,28 +7380,28 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           time={getHorarioDisplay(point?.entrada1)} 
           active={getHorarioDisplay(point?.entrada1) !== '--:--' || nextAction === 'entrada1'} 
           isNext={nextAction === 'entrada1'}
-          obra={getObraDisplay(point?.entrada1, point?.work_name)} 
+          obra={getObraDisplay(point?.entrada1, point?.entrada1_obra || point?.work_name)} 
         />
         <PointMiniCard 
           label="Saída 1" 
           time={getHorarioDisplay(point?.saida1)} 
           active={getHorarioDisplay(point?.saida1) !== '--:--' || nextAction === 'saida1'} 
           isNext={nextAction === 'saida1'}
-          obra={getObraDisplay(point?.saida1)} 
+          obra={getObraDisplay(point?.saida1, point?.entrada1_obra || point?.work_name)} 
         />
         <PointMiniCard 
           label="Entrada 2" 
           time={getHorarioDisplay(point?.entrada2)} 
           active={getHorarioDisplay(point?.entrada2) !== '--:--' || nextAction === 'entrada2'} 
           isNext={nextAction === 'entrada2'}
-          obra={getObraDisplay(point?.entrada2)} 
+          obra={getObraDisplay(point?.entrada2, point?.entrada2_obra)} 
         />
         <PointMiniCard 
           label="Saída 2" 
           time={getHorarioDisplay(point?.saida2)} 
           active={getHorarioDisplay(point?.saida2) !== '--:--' || nextAction === 'saida2'} 
           isNext={nextAction === 'saida2'}
-          obra={getObraDisplay(point?.saida2)} 
+          obra={getObraDisplay(point?.saida2, point?.entrada2_obra)} 
         />
       </div>
 

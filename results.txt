@@ -1,2 +1,18 @@
-4679:      console.error("Erro ao registrar ponto:", err);
-4818:                <>Registrar {actionLabels[nextAction as keyof typeof actionLabels]}</>
+--- RELATÓRIO DE AUDITORIA DE OBRAS DO SISTEMA DE PONTO ---
+
+1. BUSCA POR REGISTROS COM ENTRADA 2 / SAÍDA 2 PREENCHIDAS E OBRA_PERIODO_2 = "Não informada"
+🎉 Nenhum caso com Período 2 preenchido e Obra Período 2 = "Não informada" foi encontrado!
+
+2. CONFERÊNCIA DOS REGISTROS CRÍTICOS:
+  ❌ Registro de 2026-05-05 para Carioca não encontrado no banco de dados.
+  ❌ Registro de 2026-05-09 para Carioca não encontrado no banco de dados.
+  ❌ Registro de 2026-05-02 para Carioca não encontrado no banco de dados.
+  ❌ Registro de 2026-04-27 para Carioca não encontrado no banco de dados.
+  ❌ Registro de 2026-04-17 para Nivaldo não encontrado no banco de dados.
+  ❌ Registro de 2026-04-16 para Carioca não encontrado no banco de dados.
+
+3. DETALHAMENTO DE CÁLCULOS E ENTRADAS DO CARIOCA (27/04 até 10/05):
+Dias encontrados com registros de ponto: 0
+Total geral de minutos trabalhados: 0 minutos (00:00)
+-> Custo Total Geral no Período: R$ 0,00
+-> Horas Totais Gerais: 00:00
