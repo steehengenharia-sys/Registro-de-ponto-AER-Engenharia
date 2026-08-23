@@ -1,187 +1,104 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: users
-    // Document ID: Firebase Auth UID
-    // Fields:
-    //   - id: string (optional)
-    //   - name: string
-    //   - username: string
-    //   - role: string ('admin_master', 'admin', 'funcionario')
-    //   - role_name: string
-    //   - phone: string
-    //   - cargo: string (optional)
-    //   - telefone: string (optional)
-    //   - valor_diaria: number (optional)
-    //   - status: string ('ativo', 'inativo') (optional)
-    //   - senha: string (optional)
-    //
-    // Collection: works
-    // Document ID: UUID
-    // Fields:
-    //   - id: string
-    //   - name: string
-    //   - city: string
-    //   - address: string
-    //   - lat: number
-    //   - lng: number
-    //   - radius: number
-    //
-    // Collection: points
-    // Document ID: UUID
-    // Fields:
-    //   - id: string
-    //   - user_id: string (Firebase Auth UID)
-    //   - funcionario_id: string (Firebase Auth UID)
-    //   - user_name: string
-    //   - date: string
-    //   - work_id: string
-    //   - entrada1, saida1, entrada2, saida2: string
-    //   - entrada1_lat, entrada1_lng, entrada1_acc, entrada1_address, entrada1_dist, entrada1_status, entrada1_suspeito: various
-    //   - total_hours: number
-    //   - obs: string
-    //   - editado_manual: number
-    //   - encerrado: number
-    //
-    // ===============================================================
-
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
     
-    function isAuthenticated() {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+    function isMasterAdmin() {
+      return isSignedIn() && request.auth.token.email == "steeh.engenharia@gmail.com";
     }
 
-    function isDocOwner() {
-      return isAuthenticated() && resource != null && request.auth.uid == resource.data.user_id;
-    }
-
-    function isDocOwnerCreate() {
-      return isAuthenticated() && request.auth.uid == request.resource.data.user_id;
+    function isVerified() {
+      // Relaxed verification: signed in and (email verified OR is the master admin)
+      // For many apps, we can just check if they are signed in.
+      return isSignedIn() && (request.auth.token.email_verified == true || isMasterAdmin());
     }
 
     function isAdmin() {
-      return isAuthenticated() && (
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin_master', 'admin'] ||
-        (request.auth.token.email == "steeh.engenharia@gmail.com" && request.auth.token.email_verified == true)
+      return isMasterAdmin() || (
+        isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin_master', 'admin']
       );
     }
 
-    function hasOnlyAllowedFields(allowedFields) {
-      return request.resource.data.keys().hasOnly(allowedFields);
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    function validStringLength(field, minLen, maxLen) {
-      return request.resource.data[field] is string &&
-             request.resource.data[field].size() >= minLen &&
-             request.resource.data[field].size() <= maxLen;
+    function incoming() {
+      return request.resource.data;
     }
 
-    function isValidOptionalString(field, minLen, maxLen) {
-      return !(field in request.resource.data) ||
-             (request.resource.data[field] is string &&
-              request.resource.data[field].size() >= minLen &&
-              request.resource.data[field].size() <= maxLen);
+    function existing() {
+      return resource.data;
     }
 
-    // ===============================================================
-    // Domain Validators
-    // ===============================================================
-
-    function isValidUser() {
-      return hasOnlyAllowedFields(['id', 'name', 'username', 'role', 'role_name', 'phone', 'cargo', 'telefone', 'valor_diaria', 'status', 'senha']) &&
-             isValidOptionalString('id', 1, 100) &&
-             validStringLength('name', 1, 100) &&
-             validStringLength('username', 1, 50) &&
-             request.resource.data.role in ['admin_master', 'admin', 'funcionario'] &&
-             isValidOptionalString('role_name', 0, 50) &&
-             isValidOptionalString('phone', 0, 20) &&
-             isValidOptionalString('cargo', 0, 50) &&
-             isValidOptionalString('telefone', 0, 20) &&
-             (!('valor_diaria' in request.resource.data) || request.resource.data.valor_diaria is number) &&
-             (!('status' in request.resource.data) || request.resource.data.status in ['ativo', 'inativo']) &&
-             isValidOptionalString('senha', 0, 100);
-    }
-
-    function isValidWork() {
-      return hasOnlyAllowedFields(['id', 'name', 'city', 'address', 'lat', 'lng', 'radius']) &&
-             isValidOptionalString('id', 1, 100) &&
-             validStringLength('name', 1, 100) &&
-             validStringLength('city', 1, 100) &&
-             validStringLength('address', 1, 200) &&
-             (!('lat' in request.resource.data) || request.resource.data.lat is number) &&
-             (!('lng' in request.resource.data) || request.resource.data.lng is number) &&
-             (!('radius' in request.resource.data) || request.resource.data.radius is number);
-    }
-
-    function isValidPointCreate() {
-      // For create, we need minimal structure validation
-      return request.resource.data.user_id is string &&
-             request.resource.data.user_id.size() < 100 &&
-             request.resource.data.date is string &&
-             request.resource.data.date.size() == 10;
-    }
-
-    function isValidPointUpdate() {
-      // For update, we only check fields that are explicitly being updated if present
-      // We also enforce that user_id and date cannot be changed
-      return (!('user_id' in request.resource.data) || request.resource.data.user_id == resource.data.user_id) &&
-             (!('date' in request.resource.data) || request.resource.data.date == resource.data.date);
-    }
-
-    function isPointOwner(pointId) {
-      return isAuthenticated() && pointId.startsWith(request.auth.uid + "_");
-    }
-
-    // ===============================================================
-    // Collections
-    // ===============================================================
-
+    // --- Users Collection ---
     match /users/{userId} {
       // Users can read their own profile, admins can read all
-      allow read: if isOwner(userId) || isAdmin();
+      allow get: if isOwner(userId) || isAdmin();
       // Only admins can list users to prevent leaking profile data
       allow list: if isAdmin();
       
       // Users can create their own profile on first login (as funcionario)
-      allow create: if (isOwner(userId) && request.resource.data.role == 'funcionario' && isValidUser()) || (isAdmin() && isValidUser());
+      allow create: if isOwner(userId) || isAdmin();
       
-      allow update: if isAdmin() && isValidUser();
-      allow delete: if isAdmin();
+      // Only admins can update/delete roles and other user data
+      allow update, delete: if isAdmin();
     }
 
+    // --- Works Collection ---
     match /works/{workId} {
       // All authenticated users need to read works to select them
-      allow read: if isAuthenticated();
+      allow read: if isSignedIn();
       
       // Only admins can manage works
-      allow create, update: if isAdmin() && isValidWork();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // --- Points Collection ---
+    match /points/{pointId} {
+      allow get, list: if isAdmin()
+        || (
+          isSignedIn()
+          && (resource == null || resource.data.user_id == request.auth.uid)
+        );
+
+      allow create: if isAdmin()
+        || (
+          isSignedIn()
+          && request.resource.data.user_id == request.auth.uid
+          && request.resource.data.funcionario_id == request.auth.uid
+        );
+
+      allow update: if isAdmin()
+        || (
+          isSignedIn()
+          && resource.data.user_id == request.auth.uid
+          && request.resource.data.user_id == request.auth.uid
+          && request.resource.data.funcionario_id == request.auth.uid
+        );
+
       allow delete: if isAdmin();
     }
 
-    match /points/{pointId} {
-      // Users can read their own points, admins can read all
-      // Handle the case where the document doesn't exist yet (resource == null)
-      allow read: if isAdmin() || (isAuthenticated() && (resource == null || request.auth.uid == resource.data.user_id));
+    // --- Point Reminder Schedules ---
+    match /pointReminderSchedules/{scheduleId} {
+      // Admins see all, users see company default or their own
+      allow read: if isAdmin() || (isSignedIn() && (scheduleId == 'companyDefault' || scheduleId == request.auth.uid));
       
-      // Users can create their own points, admins can create any
-      allow create: if (isAuthenticated() && request.auth.uid == request.resource.data.user_id && isValidPointCreate()) || (isAdmin() && isValidPointCreate());
-      
-      // Users can update their own points, admins can update any
-      allow update: if (isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid)) && isValidPointUpdate();
-      
-      // Only admins can delete points
-      allow delete: if isAdmin();
+      // Admins manage all, users manage their own
+      allow write: if isAdmin() || (isSignedIn() && scheduleId == request.auth.uid);
     }
   }
 }

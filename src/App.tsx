@@ -40,7 +40,8 @@ import {
   Database,
   ShieldCheck,
   AlertTriangle,
-  CheckCheck
+  CheckCheck,
+  Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -50,6 +51,10 @@ import * as XLSX from 'xlsx';
 import { auth, db, secondaryAuth } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDoc, orderBy, arrayUnion, writeBatch } from 'firebase/firestore';
+import { PointReminderCard } from './components/PointReminderCard';
+import { PointScheduleSettings } from './components/PointScheduleSettings';
+
+
 
 // --- Global Utilities ---
 export const sanitizePointData = (data: any): any => {
@@ -1940,7 +1945,7 @@ const calculateWorkStatus = (p: PointRecord | null): WorkStatus => {
   if (hasSaida2) return WorkStatus.ENCERRADO; 
   if (p.status === WorkStatus.ENCERRADO) return WorkStatus.ENCERRADO;
 
-  if (p.status && p.status !== WorkStatus.ENCERRADO) return p.status as WorkStatus;
+  if (p.status) return p.status as WorkStatus;
 
   // Fallback
   if (hasEntrada2) return WorkStatus.TRABALHANDO;
@@ -2054,7 +2059,7 @@ const Modal = ({
   onClose: () => void; 
   title: string; 
   children: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'adminSchedule' | 'employeeSchedule';
   zIndexClass?: string;
 }) => {
   const sizeClasses = {
@@ -2062,6 +2067,8 @@ const Modal = ({
     md: 'max-w-lg',
     lg: 'max-w-[70vw] h-[80vh] flex flex-col',
     xl: 'max-w-[95vw] lg:max-w-[90vw] h-[85vh] flex flex-col',
+    adminSchedule: 'w-[min(560px,calc(100vw-32px))] max-w-[560px]',
+    employeeSchedule: 'w-[min(480px,calc(100vw-24px))] max-w-[480px]',
   };
 
   return (
@@ -2099,7 +2106,7 @@ const Modal = ({
 
 // --- Main App ---
 
-type ViewType = 'dashboard' | 'users' | 'points' | 'works' | 'employee' | 'history' | 'reports';
+type ViewType = 'dashboard' | 'users' | 'points' | 'works' | 'employee' | 'history' | 'alerts' | 'reports';
 
 export default function App() {
   const [user, setUser] = useState<UserData | null>(null);
@@ -2200,8 +2207,8 @@ export default function App() {
 
       // Real-time listener for points
       let q = query(collection(db, 'points'), orderBy('date', 'desc'));
-      if (user.role === 'funcionario') {
-        q = query(collection(db, 'points'), where('user_id', '==', user.id), orderBy('date', 'desc'));
+      if (user.role === 'funcionario' && auth.currentUser) {
+        q = query(collection(db, 'points'), where('user_id', '==', auth.currentUser.uid), orderBy('date', 'desc'));
       }
       
       const unsubscribePoints = onSnapshot(q, (snapshot) => {
@@ -2581,6 +2588,7 @@ export default function App() {
                       </div>
                       <SidebarItem active={view === 'employee'} icon={<Clock size={20} />} label="Meu Ponto" onClick={() => { setView('employee'); setIsSidebarOpen(false); }} />
                       <SidebarItem active={view === 'history'} icon={<Calendar size={20} />} label="Meu Histórico" onClick={() => { setView('history'); setIsSidebarOpen(false); }} />
+                      <SidebarItem active={view === 'alerts'} icon={<Bell size={20} />} label="Meus Alertas" onClick={() => { setView('alerts'); setIsSidebarOpen(false); }} />
                     </>
                   )}
                 </>
@@ -2588,6 +2596,7 @@ export default function App() {
                 <>
                   <SidebarItem active={view === 'employee'} icon={<Clock size={20} />} label="Meu Ponto" onClick={() => { setView('employee'); setIsSidebarOpen(false); }} />
                   <SidebarItem active={view === 'history'} icon={<Calendar size={20} />} label="Meu Histórico" onClick={() => { setView('history'); setIsSidebarOpen(false); }} />
+                  <SidebarItem active={view === 'alerts'} icon={<Bell size={20} />} label="Meus Alertas" onClick={() => { setView('alerts'); setIsSidebarOpen(false); }} />
                 </>
               )}
             </nav>
@@ -2634,6 +2643,7 @@ export default function App() {
               {view === 'reports' && 'Relatórios Gerenciais'}
               {view === 'employee' && 'Registro de Ponto'}
               {view === 'history' && 'Meu Histórico'}
+              {view === 'alerts' && 'Meus Alertas'}
             </h2>
           </div>
           <div className="flex items-center gap-4">
@@ -2660,6 +2670,7 @@ export default function App() {
               {view === 'reports' && <ReportsView points={points} users={users} works={works} />}
               {view === 'employee' && user.role !== 'admin_master' && <EmployeeView user={user!} works={works} onRefresh={refreshData} />}
               {view === 'history' && user.role !== 'admin_master' && <HistoryView user={user!} points={points} />}
+              {view === 'alerts' && user.role !== 'admin_master' && <AlertsView user={user!} />}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -3252,6 +3263,8 @@ function DashboardView({ points, users, works, onRefresh }: { points: PointRecor
 
 function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData[], onRefresh: () => void }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [isEmployeeScheduleModalOpen, setIsEmployeeScheduleModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [formData, setFormData] = useState({ 
     usuario: '', 
@@ -3411,10 +3424,21 @@ function UsersView({ user, users, onRefresh }: { user: UserData, users: UserData
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-bold text-slate-400">Lista de Colaboradores</h3>
-        <Button onClick={() => { setEditingUser(null); setFormData({ usuario: '', senha: '', nome: '', nivel: 'funcionario', cargo: '', telefone: '', valor_diaria: '' }); setIsModalOpen(true); }}>
-          <Plus size={18} /> Novo Funcionário
-        </Button>
+        <div className="flex gap-2">
+          {(user.role === 'admin_master' || user.role === 'admin') && (
+            <Button variant="secondary" onClick={() => setIsScheduleModalOpen(true)}>
+              <Clock size={18} className="text-orange-500" /> Horários e alertas
+            </Button>
+          )}
+          <Button onClick={() => { setEditingUser(null); setFormData({ usuario: '', senha: '', nome: '', nivel: 'funcionario', cargo: '', telefone: '', valor_diaria: '' }); setIsModalOpen(true); }}>
+            <Plus size={18} /> Novo Funcionário
+          </Button>
+        </div>
       </div>
+
+      <Modal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} title="Horários e alertas de ponto" size="adminSchedule">
+        <PointScheduleSettings users={users} currentUser={user} />
+      </Modal>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
         {users.map(u => (
@@ -4603,7 +4627,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
     
     const isSingleUser = filters.userId ? true : false;
     if (isSingleUser) {
-      generateReciboPDF(intervals, total, filters, users, works, 'auto', diaria);
+      generateReciboPDF(intervals, total, filters, users, diaria, 'auto');
     } else {
       generateOfficialReportPDF(intervals, total, filters, users, works, 'auto', diaria);
     }
@@ -4819,10 +4843,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
           <table className="w-full text-left border-collapse mobile-cards-table">
             <thead>
               <tr className="bg-slate-800/50 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">
-                <th className="px-6 py-5">
+                <th className="w-[40px] py-5 text-center">
                   <input 
                     type="checkbox" 
-                    className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-orange-600 focus:ring-orange-600/50"
+                    className="appearance-none w-3.5 h-3.5 rounded border border-slate-600 bg-slate-950 checked:bg-orange-600 checked:border-orange-600 focus:ring-2 focus:ring-orange-600/50 cursor-pointer"
                     checked={filteredPoints.length > 0 && selecionados.length === filteredPoints.length}
                     onChange={(e) => selecionarTodos(e.target.checked)}
                   />
@@ -4841,10 +4865,10 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
             <tbody className="divide-y divide-slate-800">
               {paginatedPoints.map(p => (
                 <tr key={p.id} className={`hover:bg-slate-800/30 transition-colors group ${selecionados.includes(p.id) ? 'bg-orange-500/5' : ''}`}>
-                  <td className="px-6 py-4">
+                  <td className="w-[40px] py-4 text-center">
                     <input 
                       type="checkbox" 
-                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-orange-600 focus:ring-orange-600/50"
+                      className="appearance-none w-3.5 h-3.5 rounded border border-slate-600 bg-slate-950 checked:bg-orange-600 checked:border-orange-600 focus:ring-2 focus:ring-orange-600/50 cursor-pointer"
                       checked={selecionados.includes(p.id)}
                       onChange={() => toggleSelecionado(p.id)}
                     />
@@ -5426,8 +5450,15 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </div>
 
               {/* 3. OBSERVAÇÕES */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Observações do Registro</label>
+              <div className="space-y-3 mt-4">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Observações Detalhadas</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <textarea value={editFormData.obs_entrada1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada1: e.target.value })} placeholder="Obs E1..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-100 h-16 resize-none" />
+                  <textarea value={editFormData.obs_saida1 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida1: e.target.value })} placeholder="Obs S1..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-100 h-16 resize-none" />
+                  <textarea value={editFormData.obs_entrada2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_entrada2: e.target.value })} placeholder="Obs E2..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-100 h-16 resize-none" />
+                  <textarea value={editFormData.obs_saida2 || ''} onChange={e => setEditFormData({ ...editFormData, obs_saida2: e.target.value })} placeholder="Obs S2..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-100 h-16 resize-none" />
+                </div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mt-2">Observação Geral</label>
                 <textarea
                   value={editFormData.obs || ''}
                   onChange={e => setEditFormData({ ...editFormData, obs: e.target.value })}
@@ -5455,7 +5486,7 @@ function PointsView({ user, points, users, works, onRefresh }: { user: UserData,
               </div>
 
               {isPointOpen && (
-                <div className="pt-2">
+                <div className="pt-2 hidden md:block">
                   <Button 
                     type="button" 
                     onClick={handleCloseShiftManually} 
@@ -6562,9 +6593,9 @@ function ReportsView({ points, users, works }: { points: PointRecord[], users: U
     const diaria = parseFloat(globalDiariaValue) || 180;
     
     if (pdfDocType === 'recibo') {
-      generateReciboPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
+      generateReciboPDF(finalData, totalCostToDisplay, filters, users, diaria, calcMode);
     } else if (pdfDocType === 'fechamento') {
-      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
+      generateFechamentoPDF(finalData, totalCostToDisplay, filters, users, works, diaria, calcMode);
     } else {
       generateOfficialReportPDF(finalData, totalCostToDisplay, filters, users, works, calcMode, diaria);
     }
@@ -6984,12 +7015,14 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
   const [tempPos, setTempPos] = useState<any>(null);
 
   const loadTodayPoint = useCallback(async () => {
-    if (!user) return;
+    if (!auth.currentUser) return;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    const docId = `${user.id}_${today}`;
+    const pointId = `${auth.currentUser.uid}_${today}`;
+    const pointRef = doc(db, "points", pointId);
     
     try {
-      const pointSnap = await getDoc(doc(db, 'points', docId));
+      const pointSnap = await getDoc(pointRef);
+      
       if (pointSnap.exists()) {
         const todayPoint = adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() });
         setPoint(todayPoint);
@@ -7011,10 +7044,15 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
         setPoint(null);
         setSelectedWorkId("");
       }
-    } catch (error) {
-      console.error("Error loading today's point:", error);
+    } catch (error: any) {
+      if (error?.code === 'permission-denied') {
+        setPoint(null);
+        setSelectedWorkId("");
+      } else {
+        console.error("Error loading today's point:", error);
+      }
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => { 
     loadTodayPoint(); 
@@ -7041,9 +7079,11 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
     setIsRegistering(true);
     setStatus('locating');
     
-    console.log("Iniciando registro:", type, "Usuário:", user?.id, "Extra:", extraData);
+    console.log("Iniciando registro:", type, "Usuário Auth:", auth.currentUser?.uid, "Extra:", extraData);
     
     try {
+      if (!auth.currentUser) throw new Error("Usuário não autenticado.");
+
       // 1. Get Location
       let pos: GeolocationPosition | null = null;
       try {
@@ -7063,17 +7103,29 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       const agora = new Date();
       const horaLocal = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
       const dataLocal = agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-      const docId = `${user.id}_${dataLocal}`;
+      const docId = `${auth.currentUser.uid}_${dataLocal}`;
       const pointRef = doc(db, 'points', docId);
 
-      const pointSnap = await getDoc(pointRef);
-      let pointData: PointRecord = pointSnap.exists() 
+      let pointSnap: any = null;
+      let exists = false;
+      try {
+          pointSnap = await getDoc(pointRef);
+          exists = pointSnap.exists();
+      } catch (err: any) {
+          if (err?.code === 'permission-denied') {
+              exists = false;
+          } else {
+              throw err;
+          }
+      }
+
+      let pointData: PointRecord = exists && pointSnap
         ? adaptLegacyPoint({ id: pointSnap.id, ...pointSnap.data() })
         : {
             id: docId,
-            user_id: String(user.id),
-            funcionario_id: String(user.id),
-            user_name: user.name,
+            user_id: auth.currentUser.uid,
+            funcionario_id: auth.currentUser.uid,
+            user_name: user?.name || 'Usuário',
             date: dataLocal,
             total_hours: '00:00',
             status: WorkStatus.NAO_INICIADO
@@ -7205,9 +7257,9 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
       await loadTodayPoint();
       onRefresh();
       
-    } catch (err) {
-      console.error("Erro ao registrar ponto:", err);
-      alert("Erro ao registrar. Tente novamente.");
+    } catch (err: any) {
+      console.error("Erro ao registrar ponto (Código:", err?.code, "):", err);
+      alert("Não foi possível registrar o ponto. Tente novamente.");
     } finally {
       setStatus('idle');
       setIsRegistering(false);
@@ -7431,6 +7483,20 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function AlertsView({ user }: { user: UserData }) {
+  return (
+    <div className="flex flex-col items-center">
+      <div className="w-full max-w-[520px] space-y-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-bold text-slate-400 uppercase tracking-widest text-xs mb-6">Configuração dos meus alertas</h3>
+          <PointScheduleSettings currentUser={user} isEmployeeView={true} />
+        </Card>
+        <PointReminderCard userId={user.id} />
+      </div>
     </div>
   );
 }

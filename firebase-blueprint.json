@@ -44,48 +44,39 @@
         "user_name": { "type": "string" },
         "date": { "type": "string" },
         "work_id": { "type": "string" },
-        "entrada1": { "type": "string" },
-        "saida1": { "type": "string" },
-        "entrada2": { "type": "string" },
-        "saida2": { "type": "string" },
-        "entrada1_lat": { "type": "number" },
-        "entrada1_lng": { "type": "number" },
-        "entrada1_acc": { "type": "number" },
-        "entrada1_address": { "type": "string" },
-        "entrada1_dist": { "type": "number" },
-        "entrada1_status": { "type": "string" },
-        "entrada1_suspeito": { "type": "number" },
-        "entrada1_gps_status": { "type": "string" },
-        "saida1_lat": { "type": "number" },
-        "saida1_lng": { "type": "number" },
-        "saida1_acc": { "type": "number" },
-        "saida1_address": { "type": "string" },
-        "saida1_dist": { "type": "number" },
-        "saida1_status": { "type": "string" },
-        "saida1_suspeito": { "type": "number" },
-        "saida1_gps_status": { "type": "string" },
-        "entrada2_lat": { "type": "number" },
-        "entrada2_lng": { "type": "number" },
-        "entrada2_acc": { "type": "number" },
-        "entrada2_address": { "type": "string" },
-        "entrada2_dist": { "type": "number" },
-        "entrada2_status": { "type": "string" },
-        "entrada2_suspeito": { "type": "number" },
-        "entrada2_gps_status": { "type": "string" },
-        "saida2_lat": { "type": "number" },
-        "saida2_lng": { "type": "number" },
-        "saida2_acc": { "type": "number" },
-        "saida2_address": { "type": "string" },
-        "saida2_dist": { "type": "number" },
-        "saida2_status": { "type": "string" },
-        "saida2_suspeito": { "type": "number" },
-        "saida2_gps_status": { "type": "string" },
+        "work_name": { "type": "string" },
+        "status": { "type": "string" },
+        "entrada1": { "type": "object" },
+        "saida1": { "type": "object" },
+        "entrada2": { "type": "object" },
+        "saida2": { "type": "object" },
         "total_hours": { "type": "number" },
         "obs": { "type": "string" },
         "editado_manual": { "type": "number" },
-        "encerrado": { "type": "number" }
+        "encerrado": { "type": "boolean" },
+        "corrigido_manual": { "type": "boolean" }
       },
       "required": ["id", "user_id", "date"]
+    },
+    "PointReminderSchedule": {
+      "title": "Point Reminder Schedule",
+      "description": "Notification settings for a user or company",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timezone": { "type": "string" },
+        "workDays": { "type": "array" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "entryReminder1": { "type": "string" },
+        "entryReminder2": { "type": "string" },
+        "exitReminder1": { "type": "string" },
+        "exitReminder2": { "type": "string" },
+        "useCompanyDefault": { "type": "boolean" },
+        "employeeUid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      }
     }
   },
   "firestore": {
@@ -100,6 +91,10 @@
     "/points/{pointId}": {
       "schema": { "$ref": "#/entities/Point" },
       "description": "Time clock records"
+    },
+    "/pointReminderSchedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/PointReminderSchedule" },
+      "description": "Notification schedules"
     }
   }
 }
