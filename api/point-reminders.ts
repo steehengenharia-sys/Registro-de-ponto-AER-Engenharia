@@ -1,4 +1,4 @@
-import { dispatchReminders } from './_lib/pointReminderDispatcher';
+import { dispatchReminders } from './_lib/pointReminderDispatcher.js';
 
 export default {
   async fetch(request: Request) {

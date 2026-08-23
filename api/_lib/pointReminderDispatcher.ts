@@ -1,4 +1,4 @@
-import { getAdminDb, getAdminMessaging } from './firebaseAdmin';
+import { getAdminDb, getAdminMessaging } from './firebaseAdmin.js';
 
 // Represents schedule saved in Firestore
 interface PointSchedule {
