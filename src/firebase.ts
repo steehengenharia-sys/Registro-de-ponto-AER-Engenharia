@@ -11,6 +11,7 @@ import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
+export const firebaseApp = app;
 
 // Configuração padrão robusta de Firestore
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
