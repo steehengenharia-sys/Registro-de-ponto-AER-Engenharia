@@ -42,9 +42,9 @@ export const PointReminderCard: React.FC<PointReminderCardProps> = ({ userId, on
       await unregisterPushDevice(userId);
       localStorage.setItem(DEVICE_ACTIVE_KEY, 'false');
       setIsPushActive(false);
-      setMessage('Alertas desativados. Nota: Permissões de notificação devem ser removidas nas configurações do seu navegador ou celular.');
+      setMessage('Alertas desativados neste celular.');
     } catch (error: any) {
-      setMessage(error.message || 'Erro ao desativar notificações.');
+      setMessage('Não foi possível desativar os alertas. Tente novamente.');
     } finally {
       setLoading(false);
     }

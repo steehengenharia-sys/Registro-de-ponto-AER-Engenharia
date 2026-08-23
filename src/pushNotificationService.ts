@@ -87,8 +87,23 @@ export async function unregisterPushDevice(userId: string): Promise<void> {
   if (!supported) return;
   
   try {
+    let registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration) {
+      registration = await navigator.serviceWorker.register('/sw.js');
+    }
+    await navigator.serviceWorker.ready;
+
     const messaging = getMessaging(firebaseApp);
-    await deleteToken(messaging);
+    
+    try {
+      await getToken(messaging, {
+        vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
+        serviceWorkerRegistration: registration
+      });
+      await deleteToken(messaging);
+    } catch (tokenError) {
+      console.warn('Token could not be retrieved or deleted (might already be unregistered).', tokenError);
+    }
 
     const deviceId = getOrCreateDeviceId();
     const docId = `${userId}_${deviceId}`;
