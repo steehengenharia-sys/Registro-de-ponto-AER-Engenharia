@@ -1,0 +1,17 @@
+name: Alertas Ponto AER
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  verificar-alertas:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verificar lembretes de ponto
+        run: |
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://registro-de-ponto-aer-engenharia.vercel.app/api/point-reminders"
