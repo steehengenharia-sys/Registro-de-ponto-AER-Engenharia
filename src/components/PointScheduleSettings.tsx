@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Info, Check, AlertCircle } from 'lucide-react';
+import { auth } from '../firebase';
 import { 
   CompanyPointSchedule, 
   DEFAULT_COMPANY_POINT_SCHEDULE, 
@@ -45,6 +46,7 @@ interface PointScheduleSettingsProps {
   users?: UserData[];
   currentUser: UserData;
   isEmployeeView?: boolean;
+  onSaved?: () => void;
 }
 
 const Switch = ({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) => (
@@ -129,7 +131,7 @@ const SaveButton = ({
         )}
         {error && (
           <p className="text-xs text-red-400 flex items-center gap-1">
-            <AlertCircle size={12} /> Não foi possível salvar. Tente novamente.
+            <AlertCircle size={12} /> Não foi possível salvar seus alertas. Verifique sua conexão ou permissão e tente novamente.
           </p>
         )}
       </div>
@@ -137,7 +139,7 @@ const SaveButton = ({
   );
 };
 
-export const PointScheduleSettings: React.FC<PointScheduleSettingsProps> = ({ users, currentUser, isEmployeeView = false }) => {
+export const PointScheduleSettings: React.FC<PointScheduleSettingsProps> = ({ users, currentUser, isEmployeeView = false, onSaved }) => {
   const [companySchedule, setCompanySchedule] = useState<CompanyPointSchedule>(DEFAULT_COMPANY_POINT_SCHEDULE);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>(isEmployeeView ? currentUser.id : '');
   const [employeeSchedule, setEmployeeSchedule] = useState<EmployeePointScheduleOverride | null>(null);
@@ -156,11 +158,11 @@ export const PointScheduleSettings: React.FC<PointScheduleSettingsProps> = ({ us
   }, []);
 
   useEffect(() => {
-    const targetUid = isEmployeeView ? currentUser.id : selectedEmployeeId;
+    const targetUid = isEmployeeView ? auth.currentUser?.uid : selectedEmployeeId;
     if (targetUid) {
       getEmployeePointSchedule(targetUid).then(s => setEmployeeSchedule(s || { ...DEFAULT_COMPANY_POINT_SCHEDULE, useCompanyDefault: true, employeeUid: targetUid, updatedAt: null, updatedBy: '' }));
     }
-  }, [selectedEmployeeId, isEmployeeView, currentUser.id]);
+  }, [selectedEmployeeId, isEmployeeView, auth.currentUser?.uid]);
 
   const saveCompany = async () => {
     if (companySchedule.workDays.length === 0) {
@@ -174,8 +176,10 @@ export const PointScheduleSettings: React.FC<PointScheduleSettingsProps> = ({ us
 
     try {
       const reminders = calculateReminders(companySchedule.startTime, companySchedule.endTime);
-      await saveCompanyPointSchedule({ ...companySchedule, ...reminders }, currentUser.id);
+      const uid = auth.currentUser?.uid || currentUser.id;
+      await saveCompanyPointSchedule({ ...companySchedule, ...reminders }, uid);
       setCompanySuccess(true);
+      if (onSaved) onSaved();
       setTimeout(() => setCompanySuccess(false), 2000);
     } catch (err) {
       console.error(err);
@@ -197,10 +201,12 @@ export const PointScheduleSettings: React.FC<PointScheduleSettingsProps> = ({ us
       setEmployeeError(false);
 
       try {
-        const targetUid = isEmployeeView ? currentUser.id : selectedEmployeeId;
+        const uid = auth.currentUser?.uid || currentUser.id;
+        const targetUid = isEmployeeView ? uid : selectedEmployeeId;
         const reminders = calculateReminders(employeeSchedule.startTime, employeeSchedule.endTime);
-        await saveEmployeePointSchedule(targetUid, { ...employeeSchedule, ...reminders }, currentUser.id);
+        await saveEmployeePointSchedule(targetUid, { ...employeeSchedule, ...reminders }, uid);
         setEmployeeSuccess(true);
+        if (onSaved) onSaved();
         setTimeout(() => setEmployeeSuccess(false), 2000);
       } catch (err) {
         console.error(err);

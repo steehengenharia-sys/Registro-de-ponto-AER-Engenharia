@@ -7488,14 +7488,15 @@ function EmployeeView({ user, works, onRefresh }: { user: UserData, works: Work[
 }
 
 function AlertsView({ user }: { user: UserData }) {
+  const [refreshKey, setRefreshKey] = useState(0);
   return (
     <div className="flex flex-col items-center">
       <div className="w-full max-w-[520px] space-y-6">
         <Card className="p-6">
           <h3 className="text-lg font-bold text-slate-400 uppercase tracking-widest text-xs mb-6">Configuração dos meus alertas</h3>
-          <PointScheduleSettings currentUser={user} isEmployeeView={true} />
+          <PointScheduleSettings currentUser={user} isEmployeeView={true} onSaved={() => setRefreshKey(k => k + 1)} />
         </Card>
-        <PointReminderCard userId={user.id} />
+        <PointReminderCard key={refreshKey} userId={auth.currentUser?.uid || user.id} />
       </div>
     </div>
   );

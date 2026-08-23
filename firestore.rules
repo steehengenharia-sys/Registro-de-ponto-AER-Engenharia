@@ -94,10 +94,9 @@ service cloud.firestore {
 
     // --- Point Reminder Schedules ---
     match /pointReminderSchedules/{scheduleId} {
-      // Admins see all, users see company default or their own
-      allow read: if isAdmin() || (isSignedIn() && (scheduleId == 'companyDefault' || scheduleId == request.auth.uid));
+      allow get: if isAdmin() || (isSignedIn() && (scheduleId == 'companyDefault' || scheduleId == request.auth.uid));
+      allow list: if isAdmin();
       
-      // Admins manage all, users manage their own
       allow write: if isAdmin() || (isSignedIn() && scheduleId == request.auth.uid);
     }
 
